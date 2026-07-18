@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>VFFS Fill Simulator</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230F6E77'/%3E%3Crect x='9' y='7' width='14' height='18' rx='2' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='16' cy='18' r='3' fill='%23C89468'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+<div class="app">
+
+  <!-- header -->
+  <header class="header">
+    <div class="brand">
+      <h1>VFFS Fill Simulator</h1>
+      <span class="part">VF-101 · REV B</span>
+    </div>
+    <div class="spacer"></div>
+    <span class="ready" id="statusChip"><span class="dot"></span><span id="statusTxt">Ready</span></span>
+    <div class="menu" id="menuDieline">
+      <button class="btn primary" id="btnExportDL" aria-haspopup="true" aria-expanded="false"><span class="ic">↓</span>Export dieline<span class="caret">▾</span></button>
+      <div class="menu-list" role="menu">
+        <button role="menuitem" data-fmt="svg">SVG · vector</button>
+        <button role="menuitem" data-fmt="pdf">PDF · 1:1 mm</button>
+        <button role="menuitem" data-fmt="dxf">DXF · R12</button>
+        <button role="menuitem" data-fmt="png150">PNG · 150 dpi</button>
+        <button role="menuitem" data-fmt="png300">PNG · 300 dpi</button>
+        <button role="menuitem" data-fmt="png600">PNG · 600 dpi</button>
+      </div>
+    </div>
+    <div class="menu" id="menuSpec">
+      <button class="btn sec" id="btnExportSpec" aria-haspopup="true" aria-expanded="false"><span class="ic">↓</span>Spec sheet<span class="caret">▾</span></button>
+      <div class="menu-list" role="menu">
+        <button role="menuitem" data-fmt="txt">Text · .txt</button>
+        <button role="menuitem" data-fmt="csv">CSV · .csv</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="body">
+
+    <!-- control column -->
+    <aside class="controls">
+
+      <section class="group">
+        <div class="eyebrow"><span class="n">01</span> Product</div>
+        <div class="field">
+          <label>Geometry</label>
+          <div class="seg" id="segShape">
+            <button data-v="round" class="on">Round</button>
+            <button data-v="square">Square</button>
+            <button data-v="step">STEP</button>
+          </div>
+        </div>
+
+        <div id="shapeRound">
+          <div class="row2">
+            <div class="field"><label>Diameter</label><div class="in"><input id="pDia" value="30" inputmode="decimal"/><span class="unit">mm</span></div></div>
+            <div class="field"><label>Thickness</label><div class="in"><input id="pThk" value="12" inputmode="decimal"/><span class="unit">mm</span></div></div>
+          </div>
+        </div>
+
+        <div id="shapeSquare" style="display:none">
+          <div class="row3">
+            <div class="field"><label>Length</label><div class="in"><input id="pL" value="30" inputmode="decimal"/><span class="unit">mm</span></div></div>
+            <div class="field"><label>Width</label><div class="in"><input id="pW" value="22" inputmode="decimal"/><span class="unit">mm</span></div></div>
+            <div class="field"><label>Height</label><div class="in"><input id="pH" value="14" inputmode="decimal"/><span class="unit">mm</span></div></div>
+          </div>
+        </div>
+
+        <div id="shapeStep" style="display:none">
+          <div class="field">
+            <label>Model file</label>
+            <button class="btn upbtn" id="btnUpload"><span class="uic">⇪</span><span id="upName">Upload .stp / .step</span></button>
+            <input type="file" id="fileStep" accept=".stp,.step,.STP,.STEP" style="display:none"/>
+            <div class="hint" id="stepHint">Bounding box is read from the model's point cloud and used as the product envelope.</div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Unit weight</label>
+          <div class="in"><input id="pWt" value="8.0" inputmode="decimal"/><span class="unit">g</span></div>
+        </div>
+      </section>
+
+      <section class="group">
+        <div class="eyebrow"><span class="n">02</span> Fill</div>
+        <div class="field">
+          <label>Target by</label>
+          <div class="seg" id="segMode">
+            <button data-v="count" class="on">Count</button>
+            <button data-v="weight">Weight</button>
+          </div>
+        </div>
+        <div class="row2">
+          <div class="field" id="fCount"><label>Count</label><div class="in"><input id="nCount" value="18" inputmode="numeric"/><span class="unit">pcs</span></div></div>
+          <div class="field" id="fWeight" style="display:none"><label>Target weight</label><div class="in"><input id="nWt" value="150" inputmode="decimal"/><span class="unit">g</span></div></div>
+          <div class="field"><label>Drop height</label><div class="in"><input id="dropH" value="250" inputmode="decimal"/><span class="unit">mm</span></div></div>
+        </div>
+        <div class="hint" id="fillHint"></div>
+      </section>
+
+      <section class="group">
+        <div class="eyebrow"><span class="n">03</span> Bag</div>
+        <div class="field">
+          <label>Style</label>
+          <div class="seg" id="segStyle">
+            <button data-v="pillow" class="on">Pillow</button>
+            <button data-v="gusseted" disabled title="Coming soon">Gusseted</button>
+            <button data-v="sup" disabled title="Coming soon">SUP</button>
+          </div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Bag width</label><div class="in"><input id="bagW" value="140" inputmode="decimal"/><span class="unit">mm</span></div></div>
+          <div class="field"><label>Bag length</label><div class="in"><input id="bagL" value="230" inputmode="decimal"/><span class="unit">mm</span></div></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>End seal</label><div class="in"><input id="endSeal" value="10" inputmode="decimal"/><span class="unit">mm</span></div></div>
+          <div class="field"><label>Fin seal</label><div class="in"><input id="finSeal" value="10" inputmode="decimal"/><span class="unit">mm</span></div></div>
+        </div>
+        <div id="advisories"></div>
+      </section>
+
+      <section class="group">
+        <div class="eyebrow"><span class="n">04</span> Film</div>
+        <div class="field">
+          <label>Stiffness</label>
+          <div class="slider">
+            <input type="range" id="stiff" min="0" max="100" value="40" aria-label="Film stiffness"/>
+            <span class="sval" id="stiffVal">40 · Med</span>
+          </div>
+          <div class="slider-ends"><span>Limp</span><span>Stiff</span></div>
+          <div class="hint">First-order film model — limp film absorbs the drop and conforms; stiff film bounces product and tucks less at the edges.</div>
+        </div>
+      </section>
+
+      <section class="group">
+        <div class="eyebrow"><span class="n">05</span> Limits</div>
+        <div class="row2">
+          <div class="field"><label>Min headspace</label><div class="in"><input id="minHeadspace" value="30" inputmode="decimal"/><span class="unit">mm</span></div></div>
+          <div class="field"><label>Jaw clearance</label><div class="in"><input id="jawClearance" value="30" inputmode="decimal"/><span class="unit">mm</span></div></div>
+        </div>
+        <div class="hint">Min headspace flags a low settled air gap. Jaw clearance is the hard safety margin below the seal-jaw plane.</div>
+      </section>
+    </aside>
+
+    <!-- viewport -->
+    <main class="viewport">
+      <div class="grid"></div>
+
+      <div class="toolbar">
+        <div class="tseg">
+          <button class="tbtn on" id="vwFill">Fill</button>
+          <button class="tbtn" id="vwDieline">Dieline</button>
+        </div>
+        <div class="tseg" id="camSeg">
+          <button class="tbtn on" id="camIso" title="¾ view">¾</button>
+          <button class="tbtn" id="camFront" title="Front orthographic">Front</button>
+          <button class="tbtn" id="camSide" title="Side orthographic">Side</button>
+        </div>
+        <button class="tbtn go" id="btnDrop"><span class="ic">▶</span>Drop</button>
+        <button class="tbtn" id="btnReset"><span class="ic">↺</span>Reset</button>
+        <button class="tbtn on" id="btnDims">Dims</button>
+        <button class="tbtn on" id="btnSeed" title="Deterministic replay (same seed)"><span class="ic">⚲</span>Seed</button>
+      </div>
+
+      <div class="sheet">
+        <div id="sim3d"></div>
+        <svg id="dimsOverlay" xmlns="http://www.w3.org/2000/svg"></svg>
+        <div id="dielineWrap"><svg id="dielineSvg" xmlns="http://www.w3.org/2000/svg"></svg></div>
+      </div>
+
+      <!-- engineering title block -->
+      <div class="titleblock">
+        <div class="tbhead"><span>Pillow Bag</span><span id="tbTag">VFFS</span></div>
+        <div class="tbrow"><div class="k">Bag W × L</div><div class="v" id="tbBag"><b>140 × 230</b> mm</div></div>
+        <div class="tbrow"><div class="k">Web × Cut</div><div class="v" id="tbWeb">300 × 230 mm</div></div>
+        <div class="tbrow"><div class="k">Product</div><div class="v" id="tbProd">⌀30 × 12</div></div>
+        <div class="tbrow"><div class="k">Fill</div><div class="v" id="tbFill">18 pcs · 144 g</div></div>
+        <div class="tbrow"><div class="k">Fill height</div><div class="v" id="tbFH">—</div></div>
+        <div class="tbrow"><div class="k">Headspace</div><div class="v" id="tbHS">—</div></div>
+        <div class="tbrow"><div class="k">Fill vol · %</div><div class="v" id="tbVol">—</div></div>
+        <div class="tbrow"><div class="k">Film</div><div class="v" id="tbFilm">Stiffness 40 · Med</div></div>
+      </div>
+
+      <div class="scalechip" id="scalechip">Front view · live sim · mm</div>
+    </main>
+
+    <!-- mobile spec -->
+    <div class="mobile-spec">
+      <div class="ms-head"><span>Pillow bag · VFFS</span><span class="ms-ready" id="msStatus">● Ready</span></div>
+      <div class="ms-grid">
+        <div><span>Bag W × L</span><b id="msBag">140 × 230 mm</b></div>
+        <div><span>Fill</span><b id="msFill">18 pcs · 144 g</b></div>
+        <div><span>Fill height</span><b id="msFH">—</b></div>
+        <div><span>Headspace</span><b id="msHS">—</b></div>
+        <div><span>Fill vol</span><b id="msVol">—</b></div>
+        <div><span>% usable</span><b id="msPct">—</b></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
