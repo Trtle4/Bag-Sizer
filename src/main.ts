@@ -12,8 +12,9 @@ import {
   filmLabel,
   type AppState,
 } from "./state.js";
-import { FillSim, type FillParams, type Measurements } from "./physics/world.js";
-import { SimRenderer } from "./render/sim.js";
+import { FillSim, initPhysics, FIXED_DT, type FillParams, type Measurements } from "./physics/world.js";
+import { SceneRenderer, type CameraMode } from "./render/scene.js";
+import { DimOverlay } from "./render/dims.js";
 import { renderDieline } from "./render/dieline.js";
 import { getBagStyle, type BagParams } from "./bagstyles/index.js";
 import { parseStepBBox } from "./geometry/step.js";
@@ -35,7 +36,8 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
 
 const store = new Store();
 const sim = new FillSim();
-const renderer = new SimRenderer($<HTMLCanvasElement>("sim"));
+let renderer: SceneRenderer;
+let dims: DimOverlay;
 
 let dirty = true; // physics envelope needs a rebuild
 let lastMeasure: Measurements = {
@@ -58,7 +60,7 @@ function fillParams(s: AppState, seed: number): FillParams {
   return {
     style: getBagStyle(s.style),
     bag: bagParams(s),
-    product: { w: pd.w, h: pd.h, round: pd.round, hull: pd.hull },
+    product: { w: pd.w, h: pd.h, depth: pd.depth, round: pd.round, hull: pd.hull },
     unitWeight: s.pWt,
     count: fillCount(s),
     dropH: s.dropH,
@@ -70,6 +72,8 @@ function fillParams(s: AppState, seed: number): FillParams {
 function rebuild(): void {
   const s = store.get();
   sim.build(fillParams(s, s.seed));
+  renderer?.setProduct(prodDims(s));
+  renderer?.frame(sim.envelope);
   dirty = false;
 }
 
@@ -178,18 +182,46 @@ btnDims.addEventListener("click", () => {
   store.set({ showDims });
   btnDims.classList.toggle("on", showDims);
 });
+const btnSeed = $("btnSeed");
+btnSeed.addEventListener("click", () => {
+  const deterministic = !store.get().deterministic;
+  store.set({ deterministic });
+  btnSeed.classList.toggle("on", deterministic);
+  btnSeed.title = deterministic ? "Deterministic replay (same seed)" : "New seed each drop";
+});
 $("vwFill").addEventListener("click", () => setView("fill"));
 $("vwDieline").addEventListener("click", () => setView("dieline"));
+
+// Camera presets (Fill view).
+const camModes: Record<string, CameraMode> = { camIso: "iso", camFront: "front", camSide: "side" };
+for (const [id, mode] of Object.entries(camModes)) {
+  $(id).addEventListener("click", () => setCamera(mode));
+}
+function setCamera(mode: CameraMode): void {
+  store.set({ camera: mode });
+  for (const id of Object.keys(camModes)) $(id).classList.toggle("on", camModes[id] === mode);
+  renderer?.setCamera(mode, sim.envelope);
+  $("scalechip").textContent =
+    mode === "iso" ? "¾ view · live 3-D sim · mm" : `${mode === "front" ? "Front" : "Side"} ortho · mm`;
+}
 
 function setView(view: "fill" | "dieline"): void {
   store.set({ view });
   $("vwFill").classList.toggle("on", view === "fill");
   $("vwDieline").classList.toggle("on", view === "dieline");
   $("dielineWrap").classList.toggle("show", view === "dieline");
-  $("sim").style.display = view === "fill" ? "block" : "none";
-  $("scalechip").textContent =
-    view === "fill" ? "Front view · live sim · mm" : "Pillow dieline · fin seal · flat · mm";
-  if (view === "dieline") drawDieline();
+  $("sim3d").style.display = view === "fill" ? "block" : "none";
+  $("dimsOverlay").style.display = view === "fill" ? "block" : "none";
+  $("camSeg").style.display = view === "fill" ? "flex" : "none";
+  if (view === "fill") {
+    $("scalechip").textContent =
+      store.get().camera === "iso" ? "¾ view · live 3-D sim · mm" : `${store.get().camera} ortho · mm`;
+    renderer?.resize();
+  } else {
+    $("scalechip").textContent = "Pillow dieline · fin seal · flat · mm";
+    dims?.clear();
+    drawDieline();
+  }
 }
 
 // ---------- dieline ----------
@@ -384,6 +416,34 @@ function liveReadouts(m: Measurements): void {
   $("msPct").textContent = has ? `${fmt1(m.pctUsable)} %` : "—";
 }
 
+function drawDims(s: AppState): void {
+  if (!dims || !renderer) return;
+  if (!s.showDims) {
+    dims.clear();
+    return;
+  }
+  const container = $("sim3d");
+  const env = sim.envelope;
+  dims.draw(
+    {
+      mode: s.camera,
+      bagW: s.bagW,
+      bagL: s.bagL,
+      bagD: 2 * env.usableHalfD,
+      endSeal: s.endSeal,
+      dropH: s.dropH,
+      innerLen: env.innerLen,
+      fillLine: lastMeasure.fillLine,
+      headspace: lastMeasure.headspace,
+      spawnY: env.spawnY,
+      hasFill: sim.particleCount > 0 && lastMeasure.fillLine > 1,
+    },
+    renderer.camera,
+    container.clientWidth,
+    container.clientHeight,
+  );
+}
+
 // ---------- main loop ----------
 let last = performance.now();
 let acc = 0;
@@ -391,30 +451,27 @@ let prevStatus = "ready";
 function frame(now: number): void {
   let dt = (now - last) / 1000;
   last = now;
-  dt = Math.min(dt, 0.05);
+  dt = Math.min(dt, 0.1);
   acc += dt;
-  const h = 1 / 240;
+  // Fixed timestep with substep clamping: a heavy frame degrades smoothly
+  // (drops backlog) rather than spiralling. Determinism is per-substep.
   let guard = 0;
-  while (acc > h && guard < 40) {
-    sim.fixedStep(h);
-    acc -= h;
+  while (acc > FIXED_DT && guard < 6) {
+    sim.fixedStep();
+    acc -= FIXED_DT;
     guard++;
   }
+  if (guard >= 6) acc = 0;
+
   lastMeasure = sim.measurements();
-  // Apply a deferred envelope rebuild once the current fill has come to rest.
   if (dirty && !sim.isActive) rebuild();
-  if (store.get().view === "fill") {
-    renderer.draw(sim, {
-      bagW: store.get().bagW,
-      bagL: store.get().bagL,
-      endSeal: store.get().endSeal,
-      dropH: store.get().dropH,
-      showDims: store.get().showDims,
-    });
+  const s = store.get();
+  if (s.view === "fill") {
+    renderer.draw(sim);
+    drawDims(s);
   }
   liveReadouts(lastMeasure);
-  // Refresh the chip when either the physics status or the jaw-risk flag flips.
-  const statusKey = `${lastMeasure.status}|${jawViolation(store.get())}`;
+  const statusKey = `${lastMeasure.status}|${jawViolation(s)}`;
   if (statusKey !== prevStatus) {
     prevStatus = statusKey;
     setStatusChip();
@@ -423,20 +480,18 @@ function frame(now: number): void {
   requestAnimationFrame(frame);
 }
 
-new ResizeObserver(() => {
-  if (store.get().view === "fill") {
-    renderer.draw(sim, {
-      bagW: store.get().bagW,
-      bagL: store.get().bagL,
-      endSeal: store.get().endSeal,
-      dropH: store.get().dropH,
-      showDims: store.get().showDims,
-    });
-  }
-}).observe($("sim"));
-
 // ---------- boot ----------
-rebuild();
-updateReadouts();
-advisories();
-requestAnimationFrame(frame);
+(async () => {
+  await initPhysics();
+  renderer = new SceneRenderer($("sim3d"));
+  dims = new DimOverlay($("dimsOverlay") as unknown as SVGSVGElement);
+  new ResizeObserver(() => {
+    renderer.resize();
+    if (store.get().camera !== "iso") renderer.setCamera(store.get().camera, sim.envelope);
+  }).observe($("sim3d"));
+  rebuild();
+  setCamera(store.get().camera);
+  updateReadouts();
+  advisories();
+  requestAnimationFrame(frame);
+})();

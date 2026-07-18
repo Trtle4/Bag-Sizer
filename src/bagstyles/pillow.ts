@@ -22,41 +22,22 @@ import type {
   BagStyle,
   DielineEntity,
   DielineModel,
-  Pt,
   SimProfile,
   SimProfileOpts,
 } from "./types.js";
 
 function simProfile(p: BagParams, opts: SimProfileOpts): SimProfile {
-  const innerLen = innerLength(p.bagL, p.endSeal);
-  const uhw = usableHalfWidth(p.bagW, opts.stiffNorm);
-  const N = Math.max(2, opts.wallNodes);
-  const F = Math.max(2, opts.floorNodes);
-
-  const leftWall: Pt[] = [];
-  const rightWall: Pt[] = [];
-  for (let i = 0; i < N; i++) {
-    const y = (i / (N - 1)) * innerLen;
-    leftWall.push({ x: -uhw, y });
-    rightWall.push({ x: uhw, y });
-  }
-
-  const floor: Pt[] = [];
-  for (let i = 0; i < F; i++) {
-    const x = (i / (F - 1) - 0.5) * 2 * uhw; // -uhw → +uhw
-    floor.push({ x, y: 0 });
-  }
-
+  const st = opts.stiffNorm;
+  const uhw = usableHalfWidth(p.bagW, st);
+  // Formed pillow depth: a fraction of the usable width; a stiffer film stays
+  // flatter (shallower), a limp film rounds out (deeper).
+  const usableHalfD = uhw * (0.62 - 0.14 * st);
   return {
-    innerLen,
+    innerLen: innerLength(p.bagL, p.endSeal),
     usableHalfW: uhw,
-    leftWall,
-    rightWall,
-    floor,
-    // Bottom node (0) pinned at the bottom seal; top node (N-1) pinned at jaw.
-    anchoredWall: [0, N - 1],
-    // Floor edges pinned to the wall feet.
-    anchoredFloor: [0, F - 1],
+    usableHalfD,
+    floorSagGain: 2.2 - 1.8 * st,
+    billowGain: 0.5 - 0.35 * st,
   };
 }
 

@@ -70,19 +70,22 @@ describe("pillow dieline model — hand-checked", () => {
   });
 });
 
-describe("pillow sim profile", () => {
-  it("builds anchored wall + floor chains at rest geometry", () => {
-    const prof = pillow.simProfile(P, { stiffNorm: 0.4, wallNodes: 26, floorNodes: 17 });
+describe("pillow 3-D shell profile", () => {
+  it("returns inner length, usable half-width/depth and load gains", () => {
+    const prof = pillow.simProfile(P, { stiffNorm: 0.4 });
     expect(prof.innerLen).toBe(210);
-    expect(prof.leftWall).toHaveLength(26);
-    expect(prof.rightWall).toHaveLength(26);
-    expect(prof.floor).toHaveLength(17);
-    // Bottom node at floor, top node at jaw plane.
-    expect(prof.leftWall[0].y).toBeCloseTo(0, 6);
-    expect(prof.leftWall[25].y).toBeCloseTo(210, 6);
-    // Walls mirror across the centreline.
-    expect(prof.leftWall[10].x).toBeCloseTo(-prof.rightWall[10].x, 6);
-    // Endpoints anchored.
-    expect(prof.anchoredWall).toEqual([0, 25]);
+    // usableHalfWidth(140, 0.4) = 70 - (3 + 11*0.4) = 62.6
+    expect(prof.usableHalfW).toBeCloseTo(62.6, 6);
+    // depth = usableHalfW * (0.62 - 0.14*0.4)
+    expect(prof.usableHalfD).toBeCloseTo(62.6 * (0.62 - 0.14 * 0.4), 6);
+    expect(prof.floorSagGain).toBeCloseTo(2.2 - 1.8 * 0.4, 6);
+    expect(prof.billowGain).toBeCloseTo(0.5 - 0.35 * 0.4, 6);
+  });
+
+  it("stiffer film → flatter (shallower) pillow and less billow", () => {
+    const limp = pillow.simProfile(P, { stiffNorm: 0.05 });
+    const stiff = pillow.simProfile(P, { stiffNorm: 0.95 });
+    expect(stiff.usableHalfD / stiff.usableHalfW).toBeLessThan(limp.usableHalfD / limp.usableHalfW);
+    expect(stiff.billowGain).toBeLessThan(limp.billowGain);
   });
 });

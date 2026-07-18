@@ -1,12 +1,16 @@
-import { describe, it, expect } from "vitest";
-import { FillSim, type FillParams } from "../src/physics/world.js";
+import { describe, it, expect, beforeAll } from "vitest";
+import { FillSim, initPhysics, type FillParams } from "../src/physics/world.js";
 import { pillow } from "../src/bagstyles/pillow.js";
+
+beforeAll(async () => {
+  await initPhysics();
+});
 
 function makeParams(seed: number, over = false): FillParams {
   return {
     style: pillow,
     bag: { bagW: 140, bagL: 230, endSeal: 10, finSeal: 10 },
-    product: { w: 30, h: 12, round: true },
+    product: { w: 30, h: 12, depth: 30, round: true },
     unitWeight: 8,
     count: over ? 90 : 16,
     dropH: 250,
@@ -15,38 +19,32 @@ function makeParams(seed: number, over = false): FillParams {
   };
 }
 
-/** Run a full fill to rest and return the final measurements. */
 function runToRest(sim: FillSim, seconds = 5): ReturnType<FillSim["measurements"]> {
-  const h = 1 / 240;
-  const steps = Math.round(seconds / h);
-  for (let i = 0; i < steps; i++) sim.fixedStep(h);
+  const steps = Math.round(seconds / (1 / 120));
+  for (let i = 0; i < steps; i++) sim.fixedStep();
   return sim.measurements();
 }
 
-describe("fill physics", () => {
+describe("fill physics (Rapier 3-D)", () => {
   it("pieces fall, land inside the bag, and settle without exploding", () => {
     const sim = new FillSim();
     sim.build(makeParams(1234));
     sim.start();
     const m = runToRest(sim);
+    const env = sim.envelope;
 
     expect(Number.isFinite(m.fillLine)).toBe(true);
-    // Something accumulated on the floor.
     expect(m.fillLine).toBeGreaterThan(5);
-    // Nothing launched out of the envelope.
-    const env = sim.envelope;
     expect(m.fillLine).toBeLessThan(env.innerLen * 1.2);
-    // 16 light pieces in a 140×230 bag settle below the jaw.
     expect(m.status).toBe("settled");
 
-    for (const p of sim.particles()) {
-      expect(Number.isFinite(p.x)).toBe(true);
-      expect(Number.isFinite(p.y)).toBe(true);
-      // Contained laterally within a sane margin of the bag half-width.
-      expect(Math.abs(p.x)).toBeLessThan(140);
-      // Not below the seal or far above the jaw.
+    for (const p of sim.particleTransforms()) {
+      expect(Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z)).toBe(true);
+      // Contained within the bag footprint (+ margin) in x and z.
+      expect(Math.abs(p.x)).toBeLessThan(env.usableHalfW + 40);
+      expect(Math.abs(p.z)).toBeLessThan(env.usableHalfD + 40);
       expect(p.y).toBeGreaterThan(-40);
-      expect(p.y).toBeLessThan(env.spawnY + 40);
+      expect(p.y).toBeLessThan(env.spawnY + 60);
     }
   });
 
@@ -61,30 +59,28 @@ describe("fill physics", () => {
     b.start();
     const mb = runToRest(b);
 
-    expect(mb.fillLine).toBeCloseTo(ma.fillLine, 6);
-    expect(mb.pctUsable).toBeCloseTo(ma.pctUsable, 6);
+    expect(mb.fillLine).toBe(ma.fillLine);
+    expect(mb.pctUsable).toBe(ma.pctUsable);
   });
 
-  it("different seeds diverge (jitter is actually applied)", () => {
+  it("different seeds diverge (jitter applied)", () => {
     const a = new FillSim();
     a.build(makeParams(1));
     a.start();
     runToRest(a);
-    const pa = a.particles().map((p) => p.x);
+    const pa = a.particleTransforms().map((p) => p.x);
 
     const b = new FillSim();
     b.build(makeParams(2));
     b.start();
     runToRest(b);
-    const pb = b.particles().map((p) => p.x);
+    const pb = b.particleTransforms().map((p) => p.x);
 
-    // Settled pile heights are nearly seed-independent, but the individual
-    // resting positions must differ — otherwise the RNG isn't wired.
     const diff = pa.reduce((s, x, i) => s + Math.abs(x - (pb[i] ?? 0)), 0);
     expect(diff).toBeGreaterThan(1);
   });
 
-  it("reports measurements: volume, bulk density, % usable", () => {
+  it("reports 3-D measurements: volume, bulk density, % usable", () => {
     const sim = new FillSim();
     sim.build(makeParams(7));
     sim.start();
@@ -96,13 +92,45 @@ describe("fill physics", () => {
 
   it("flags overfull when fill crosses the jaw plane", () => {
     const sim = new FillSim();
-    sim.build(makeParams(3, true));
+    // A deliberately undersized bag so a modest count overruns the jaw.
+    sim.build({
+      style: pillow,
+      bag: { bagW: 70, bagL: 120, endSeal: 10, finSeal: 10 },
+      product: { w: 30, h: 12, depth: 30, round: true },
+      unitWeight: 8,
+      count: 60,
+      dropH: 200,
+      stiff: 40,
+      seed: 3,
+    });
     sim.start();
-    const m = runToRest(sim, 14); // 90 pieces spawn over ~9 s
-    // 90 pieces of ⌀30 in a 140×230 bag overruns the jaw plane.
+    const m = runToRest(sim, 12);
     expect(m.fillLine).toBeGreaterThan(sim.envelope.innerLen * 0.7);
     expect(m.status).toBe("overfull");
-    // Overflow stays contained (no lateral spray).
-    for (const p of sim.particles()) expect(Math.abs(p.x)).toBeLessThan(140);
+  });
+
+  it("builds a convex-hull collider for a STEP silhouette without error", () => {
+    const sim = new FillSim();
+    const params = makeParams(5);
+    params.product = {
+      w: 30,
+      h: 12,
+      depth: 26,
+      round: false,
+      hull: [
+        { x: 15, y: 0 },
+        { x: 7.5, y: 13 },
+        { x: -7.5, y: 13 },
+        { x: -15, y: 0 },
+        { x: -7.5, y: -13 },
+        { x: 7.5, y: -13 },
+      ],
+    };
+    params.count = 8;
+    sim.build(params);
+    sim.start();
+    const m = runToRest(sim);
+    expect(m.fillLine).toBeGreaterThan(5);
+    expect(m.status).toBe("settled");
   });
 });

@@ -30,31 +30,28 @@ export interface BagParams {
 export interface SimProfileOpts {
   /** Normalised film stiffness in [0, 1]. */
   stiffNorm: number;
-  /** Number of nodes per wall chain. */
-  wallNodes: number;
-  /** Number of nodes across the floor chain. */
-  floorNodes: number;
 }
 
 /**
- * Cross-section rest geometry, in mm.
- * x = 0 is the centreline (+x right); y = 0 is the inner floor (+y up to jaw).
+ * 3-D bag shell rest geometry (mm) for the Rapier fill sim.
+ *
+ * Axes: x = width (±, across the bag face), y = up (0 = inner floor → innerLen =
+ * jaw plane), z = depth (±, the pillow's thickness). The shell is quasi-static:
+ * the physics builds primitive kinematic wall/floor colliders from these
+ * parameters and drives their billow/sag from the resting load — it does not
+ * simulate cloth. (See docs/ADR-001-physics.md.)
  */
 export interface SimProfile {
   /** Open fill zone height, floor → jaw plane. */
   innerLen: number;
-  /** Usable half-width of the fill channel after edge tuck. */
+  /** Rest half-width in x, after edge tuck. */
   usableHalfW: number;
-  /** Left wall rest nodes, bottom → top (x negative). Length = wallNodes. */
-  leftWall: Pt[];
-  /** Right wall rest nodes, bottom → top (x positive). Length = wallNodes. */
-  rightWall: Pt[];
-  /** Floor rest nodes, left → right. Length = floorNodes. */
-  floor: Pt[];
-  /** Indices within each wall chain that are hard-anchored (never move). */
-  anchoredWall: number[];
-  /** Indices within the floor chain that are hard-anchored. */
-  anchoredFloor: number[];
+  /** Rest half-depth in z (half the formed pillow thickness). */
+  usableHalfD: number;
+  /** Load → floor-sag gain (limp sags more). */
+  floorSagGain: number;
+  /** Load → outward wall-billow gain (limp bows out more). */
+  billowGain: number;
 }
 
 /** Cutting-table layer conventions (also the DXF layer names in phase 2). */

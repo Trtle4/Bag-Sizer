@@ -6,6 +6,9 @@ export default defineConfig({
   build: {
     target: "es2022",
     sourcemap: true,
+    // Rapier ships its WASM base64-inlined and Three is large; both are needed
+    // on boot, so code-splitting wouldn't defer meaningful work.
+    chunkSizeWarningLimit: 3000,
   },
   test: {
     globals: true,

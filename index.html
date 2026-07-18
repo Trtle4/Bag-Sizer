@@ -156,13 +156,20 @@
           <button class="tbtn on" id="vwFill">Fill</button>
           <button class="tbtn" id="vwDieline">Dieline</button>
         </div>
+        <div class="tseg" id="camSeg">
+          <button class="tbtn on" id="camIso" title="¾ view">¾</button>
+          <button class="tbtn" id="camFront" title="Front orthographic">Front</button>
+          <button class="tbtn" id="camSide" title="Side orthographic">Side</button>
+        </div>
         <button class="tbtn go" id="btnDrop"><span class="ic">▶</span>Drop</button>
         <button class="tbtn" id="btnReset"><span class="ic">↺</span>Reset</button>
         <button class="tbtn on" id="btnDims">Dims</button>
+        <button class="tbtn on" id="btnSeed" title="Deterministic replay (same seed)"><span class="ic">⚲</span>Seed</button>
       </div>
 
       <div class="sheet">
-        <canvas id="sim"></canvas>
+        <div id="sim3d"></div>
+        <svg id="dimsOverlay" xmlns="http://www.w3.org/2000/svg"></svg>
         <div id="dielineWrap"><svg id="dielineSvg" xmlns="http://www.w3.org/2000/svg"></svg></div>
       </div>
 

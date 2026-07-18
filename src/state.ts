@@ -46,6 +46,7 @@ export interface AppState {
   jawClearance: number;
 
   view: ViewId;
+  camera: "iso" | "front" | "side";
   showDims: boolean;
 
   seed: number;
@@ -81,6 +82,7 @@ export const initialState: AppState = {
   jawClearance: 30,
 
   view: "fill",
+  camera: "iso",
   showDims: true,
 
   seed: 1,
@@ -121,13 +123,15 @@ export interface ProdDims extends ProductSpec {
 /** Front-view product dimensions + label for the current shape. */
 export function prodDims(s: AppState): ProdDims {
   if (s.shape === "round") {
-    return { w: s.pDia, h: s.pThk, round: true, label: `⌀${fmt(s.pDia)} × ${fmt(s.pThk)}` };
+    // Disc: width = depth = diameter, height = thickness.
+    return { w: s.pDia, h: s.pThk, depth: s.pDia, round: true, label: `⌀${fmt(s.pDia)} × ${fmt(s.pThk)}` };
   }
   const d = s.shape === "step" && s.stepDims ? s.stepDims : { l: s.pL, w: s.pW, h: s.pH };
   const hull = s.shape === "step" && s.stepHull ? s.stepHull : undefined;
   return {
     w: d.l,
     h: d.h,
+    depth: d.w,
     round: false,
     hull,
     label: `${fmt(d.l)} × ${fmt(d.w)} × ${fmt(d.h)}`,

@@ -203,7 +203,9 @@ body{
 .tbtn .ic{font-family:var(--mono); margin-right:5px}
 
 .sheet{position:absolute; inset:0}
-canvas#sim{position:absolute; inset:0; width:100%; height:100%; display:block}
+#sim3d{position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none}
+#sim3d canvas{display:block}
+#dimsOverlay{position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:2}
 #dielineWrap{
   position:absolute; inset:0; display:none; align-items:center; justify-content:center;
   padding:70px 40px 40px;
@@ -275,6 +277,23 @@ canvas#sim{position:absolute; inset:0; width:100%; height:100%; display:block}
   .ms-grid span{font-size:10px; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-3)}
   .ms-grid b{font-family:var(--mono); font-size:13px; font-weight:500; color:var(--ink); font-variant-numeric:tabular-nums}
 }
+/* Visible keyboard focus everywhere (§5). */
+.btn:focus-visible,
+.seg button:focus-visible,
+.tbtn:focus-visible{
+  outline:2px solid var(--accent); outline-offset:2px;
+  box-shadow:0 0 0 3px var(--accent-soft);
+}
+.menu-list button:focus-visible{outline:2px solid var(--accent); outline-offset:-2px}
+
+/* 44px minimum tap targets on touch/coarse pointers (§3, §5). */
+@media (pointer:coarse){
+  .tbtn{min-height:44px}
+  .btn{padding:11px 15px}
+  .seg button{padding:11px 8px}
+  .menu-list button{min-height:44px}
+}
+
 @media (prefers-reduced-motion:reduce){
   *{transition:none !important}
 }
