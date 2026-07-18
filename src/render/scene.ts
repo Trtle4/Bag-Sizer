@@ -13,7 +13,7 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { FillSim, ProductSpec } from "../physics/world.js";
+import type { FillSim, ProductSpec, LiveShell } from "../physics/world.js";
 import { simplifyHull } from "../geometry/hull.js";
 
 export type CameraMode = "iso" | "front" | "side";
@@ -23,7 +23,6 @@ const MAX_INSTANCES = 200;
 const COL_PRODUCT = 0xc89468;
 const COL_FILM = 0x8fa0a8;
 const COL_INK2 = 0x59656c;
-const COL_GRID = 0xdbe1e6;
 
 export class SceneRenderer {
   readonly renderer: THREE.WebGLRenderer;
@@ -45,7 +44,9 @@ export class SceneRenderer {
   private tubeEdges: THREE.LineSegments;
   private funnel: THREE.Mesh;
   private funnelEdges: THREE.LineSegments;
-  private grid: THREE.GridHelper;
+
+  // Cache so the (per-frame) formed shell only rebuilds when it moves materially.
+  private shellKey = "";
 
   private target = new THREE.Vector3(0, 100, 0);
 
@@ -76,11 +77,9 @@ export class SceneRenderer {
     fill.position.set(-0.6, 0.4, -0.5);
     this.scene.add(fill);
 
-    // Floor reference grid.
-    this.grid = new THREE.GridHelper(600, 24, COL_GRID, COL_GRID);
-    (this.grid.material as THREE.Material).opacity = 0.5;
-    (this.grid.material as THREE.Material).transparent = true;
-    this.scene.add(this.grid);
+    // No floor grid: the product rests on the bag's own pinched bottom seal, not
+    // an infinite ground plane. A reference grid read as a large flat surface
+    // extending past the bag footprint, so it is intentionally omitted.
 
     // Product instanced mesh (geometry swapped per shape in setProduct()).
     this.productGeo = new THREE.CylinderGeometry(15, 15, 12, 20);
@@ -170,6 +169,7 @@ export class SceneRenderer {
     innerLen: number;
     usableHalfW: number;
     usableHalfD: number;
+    flatHalfW: number;
     endSeal: number;
     jawY: number;
     tubeR: number;
@@ -178,7 +178,19 @@ export class SceneRenderer {
     funnelH: number;
   }): void {
     this.setFormer(env);
-    this.setShell(env, env.endSeal);
+    // Start from the empty (near lay-flat) formed shell; draw() bulges it live.
+    this.buildShell({
+      innerLen: env.innerLen,
+      endSeal: env.endSeal,
+      jawY: env.jawY,
+      flatHalfW: env.flatHalfW,
+      bellyHalfW: env.flatHalfW,
+      bellyHalfD: 0.5,
+      fillLine: 0,
+      roundness: 0,
+      tubeR: env.tubeR,
+      tubeLen: env.tubeLen,
+    }, 0, 0, 0);
     // Aim at the bag body (not the tall former) and keep the camera fairly level
     // so we look INTO the bag — a steep top-down angle makes product resting at
     // the back-bottom read as if it were below the transparent front film.
@@ -187,8 +199,6 @@ export class SceneRenderer {
     const reach = Math.max(env.usableHalfW * 2, env.funnelR * 2, env.innerLen) * 1.5 + 160;
     this.persp.position.set(reach * 0.7, cy + env.innerLen * 0.28, reach * 0.72);
     this.controls.target.copy(this.target);
-    this.grid.position.y = 0;
-    this.grid.scale.setScalar(Math.max(1, (env.usableHalfW * 2 + 200) / 600));
     this.setCamera(this.mode, env);
   }
 
@@ -242,37 +252,69 @@ export class SceneRenderer {
   draw(sim: FillSim): void {
     const transforms = sim.particleTransforms();
     const n = Math.min(transforms.length, MAX_INSTANCES);
+    let maxAbsX = 0;
+    let maxAbsZ = 0;
+    let maxY = 0;
     for (let i = 0; i < n; i++) {
       const t = transforms[i];
       this.dummy.position.set(t.x, t.y, t.z);
       this.dummy.quaternion.set(t.q.x, t.q.y, t.q.z, t.q.w);
       this.dummy.updateMatrix();
       this.product.setMatrixAt(i, this.dummy.matrix);
+      maxAbsX = Math.max(maxAbsX, Math.abs(t.x));
+      maxAbsZ = Math.max(maxAbsZ, Math.abs(t.z));
+      maxY = Math.max(maxY, t.y);
     }
     this.product.count = n;
     this.product.instanceMatrix.needsUpdate = true;
+
+    // Bulge the film to the live formed section, but never inside the actual
+    // product extent — the belly is clamped to enclose every piece so nothing
+    // can poke through the visible shell.
+    this.buildShell(sim.liveShell(), maxAbsX, maxAbsZ, maxY);
 
     if (this.mode === "iso") this.controls.update();
     this.renderer.render(this.scene, this.camera);
   }
 
   /**
-   * Rebuild the pillow film body for a new bag: a lofted profile that pinches
-   * flat at the sealed bottom, rounds out through the belly where product sits,
-   * and opens at the top mouth (the concept's tapered-wall cross-section in 3-D).
-   * Plus the flat, hatched bottom end-seal strip.
+   * (Re)build the pillow film body to the live FORMED cross-section: pinched flat
+   * at the sealed bottom, bulging to the perimeter-conserved belly where product
+   * sits, tapering back toward the open mouth. The belly is clamped to enclose the
+   * actual product extent (maxAbsX/Z, maxY) so nothing pokes through the film.
+   * Rebuilds only when the profile moves materially (per-frame-cheap).
    */
-  private setShell(env: { innerLen: number; usableHalfW: number; usableHalfD: number }, endSeal: number): void {
-    const { geometry, edges } = buildPillowGeometry(env.usableHalfW, env.usableHalfD, env.innerLen, endSeal);
+  private buildShell(shell: LiveShell, maxAbsX: number, maxAbsZ: number, maxY: number): void {
+    const MARG = 3; // film clearance outside the product (mm)
+    const bellyHalfW = Math.max(shell.bellyHalfW, maxAbsX + MARG);
+    const bellyHalfD = Math.max(shell.bellyHalfD, maxAbsZ + MARG, 0.5);
+    const bellyTop = Math.max(shell.fillLine, maxY + MARG, 0);
+
+    const q = (v: number) => Math.round(v * 2) / 2; // 0.5 mm quantum
+    const key = [
+      q(shell.flatHalfW), q(bellyHalfW), q(bellyHalfD), q(bellyTop),
+      q(shell.innerLen), q(shell.endSeal),
+    ].join(":");
+    if (key === this.shellKey) return;
+    this.shellKey = key;
+
+    const { geometry, edges } = buildPillowGeometry({
+      flatHalfW: shell.flatHalfW,
+      bellyHalfW,
+      bellyHalfD,
+      innerLen: shell.innerLen,
+      endSeal: shell.endSeal,
+      bellyTop,
+    });
     this.pillow.geometry.dispose();
     this.pillow.geometry = geometry;
     (this.pillowEdges.geometry as THREE.BufferGeometry).dispose();
     this.pillowEdges.geometry = edges;
 
-    // Bottom end seal: a small flat pinched strip at the sealed base.
+    // Bottom end seal: a flat, pinched strip at the full-width sealed base.
     this.seal.geometry.dispose();
-    this.seal.geometry = new THREE.PlaneGeometry(env.usableHalfW * 0.6, Math.max(4, endSeal));
-    this.seal.position.set(0, -endSeal / 2, 0);
+    this.seal.geometry = new THREE.PlaneGeometry(shell.flatHalfW * 1.2, Math.max(4, shell.endSeal));
+    this.seal.position.set(0, -shell.endSeal / 2, 0);
   }
 
   /** Rebuild the former (tube + hopper funnel) geometry for a new bag. */
@@ -324,48 +366,58 @@ function buildProductGeometry(spec: ProductSpec): THREE.BufferGeometry {
 }
 
 /**
- * Loft a pillow film body: an oval cross-section whose width/depth follow the
- * pillow profile — pinched flat at the sealed bottom, rounded through the belly,
- * thinning toward the open top mouth. Returns the surface + an edge wireframe.
+ * Loft a pillow film body to the FORMED cross-section. Width/depth vary by height:
+ * a full-width flat weld at the sealed bottom, rising to the perimeter-conserved
+ * belly (bellyHalfW × bellyHalfD) where product rests, then tapering back toward a
+ * flatter, wider open mouth above the fill line. Returns surface + edge wireframe.
+ *
+ * The belly dims already enclose the real product extent (clamped by the caller),
+ * so the film never clips a piece.
  */
-function buildPillowGeometry(
-  halfW: number,
-  halfD: number,
-  innerLen: number,
-  endSeal: number,
-): { geometry: THREE.BufferGeometry; edges: THREE.BufferGeometry } {
+function buildPillowGeometry(p: {
+  flatHalfW: number;
+  bellyHalfW: number;
+  bellyHalfD: number;
+  innerLen: number;
+  endSeal: number;
+  bellyTop: number; // top of the filled belly region (mm)
+}): { geometry: THREE.BufferGeometry; edges: THREE.BufferGeometry } {
   const LEVELS = 30;
   const SEG = 32;
   const smooth = (x: number) => {
     const t = Math.max(0, Math.min(1, x));
     return t * t * (3 - 2 * t);
   };
-  // The pinch is BELOW the fill zone (the sealed strip, y in [-endSeal, 0]); the
-  // belly stays FULL width where product actually rests (y >= 0) so nothing pokes
-  // out. Depth bulges through the belly and thins toward the open mouth.
+  const { flatHalfW, bellyHalfW, bellyHalfD, innerLen, endSeal } = p;
+  const bellyTop = Math.min(p.bellyTop, innerLen);
   const y0 = -endSeal;
   const y1 = innerLen;
-  // Shell always sits a margin OUTSIDE the collision volume (±usableHalfW/D) so
-  // product is unambiguously contained; the pinch is confined to the seal strip.
-  const WMARGIN = 1.1;
+  const SEAL_D = 0.4; // near-zero depth of the flat bottom weld (mm)
+  // Absolute half-width/half-depth of the film at height y.
   const scaleAt = (y: number): { w: number; d: number } => {
     if (y <= 0) {
-      const f = smooth((y - y0) / Math.max(1, endSeal)); // 0 at seal → 1 at floor
-      return { w: 0.12 + (WMARGIN - 0.12) * f, d: 0.08 + (WMARGIN - 0.08) * f };
+      // Sealed strip: flat full-width weld (y0) rounding up to the belly (y=0).
+      const f = smooth((y - y0) / Math.max(1, endSeal));
+      return { w: flatHalfW + (bellyHalfW - flatHalfW) * f, d: SEAL_D + (bellyHalfD - SEAL_D) * f };
     }
-    const h = y / innerLen; // 0 at floor → 1 at mouth
-    const belly = Math.sin(Math.PI * Math.min(1, h / 0.92)); // 0 at ends, 1 mid
-    const taper = 1 - 0.25 * smooth((h - 0.8) / 0.2); // thin toward the mouth
-    // Modest belly so the shell hugs the fill volume (reads clearly as "inside").
-    return { w: WMARGIN, d: (WMARGIN + 0.14 * belly) * taper };
+    if (y <= bellyTop || bellyTop <= 0) {
+      // Belly: full formed section where product rests.
+      return { w: bellyHalfW, d: bellyHalfD };
+    }
+    // Above the fill line the film is unloaded: it relaxes back toward a flatter,
+    // wider open mouth (depth thins, width opens toward the lay-flat width).
+    const f = smooth((y - bellyTop) / Math.max(1, innerLen - bellyTop));
+    const w = bellyHalfW + (Math.max(flatHalfW * 0.92, bellyHalfW) - bellyHalfW) * f;
+    const d = bellyHalfD + (Math.max(0.6, bellyHalfD * 0.3) - bellyHalfD) * f;
+    return { w, d };
   };
 
   const rings: THREE.Vector3[][] = [];
   for (let i = 0; i <= LEVELS; i++) {
     const y = y0 + (i / LEVELS) * (y1 - y0);
     const s = scaleAt(y);
-    const hw = halfW * s.w;
-    const hd = halfD * s.d;
+    const hw = s.w;
+    const hd = s.d;
     const ring: THREE.Vector3[] = [];
     for (let j = 0; j < SEG; j++) {
       const a = (j / SEG) * Math.PI * 2;

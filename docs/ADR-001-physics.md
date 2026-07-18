@@ -60,3 +60,46 @@ Migrate the fill sim to **Rapier3D (`@dimforge/rapier3d`) + Three.js** in Phase 
   physics-independent and proceeds first, unchanged.
 - **Phase 3** = this migration, with the original polish pass (perf, mobile,
   determinism toggle, README) folded in.
+
+## Addendum — formed cross-section, elliptical wall cage, disc stacking (2026-07-18)
+
+Refinements after the first Phase-3 fill sim shipped, driven by ¾-view review
+(product poking through the shell, resting on a flat plane beyond the bag, and
+lying in a flat scattered layer instead of stacking):
+
+- **Formed cross-section by perimeter conservation** (`src/geometry/formed.ts`).
+  The lay-flat film has a fixed circumference `C = 4·flatHalfW`; as product
+  fills, that fixed perimeter redistributes from flat toward round, giving a
+  *bounded* formed depth (a pillow can't bulge past a fully-round section without
+  its width shrinking). `roundnessFromFill(settled volume, stiffness)` drives the
+  roundness; limp film rounds deeper than stiff film for the same load. This one
+  model drives the collider, the rendered shell, and the FORMED DEPTH readout, so
+  they match by construction.
+- **Elliptical wall cage** replaces the four flat box walls. The film wall is a
+  ring of thin static segments lying *on* the formed ellipse, so the collider is
+  the exact twin of the visible film — no rectangular corners for a disc to sit
+  in, no gap where the old billowed side walls pulled away from the front/back
+  walls. Containment is exact (verified: zero escapes in x and z at a full fill).
+- **Bottom seal, not a ground plane.** The old infinite reference grid read as a
+  floor beyond the bag footprint; it's removed. Product rests on a bag-sized
+  sagging floor and the rendered pillow pinches to a flat welded bottom seal.
+- **Disc collider = thin N-gon prism, not an analytic cylinder.** Rapier's
+  cylinder–cylinder contact between coplanar faces is a degenerate single point,
+  so flat discs sank into each other. A convex polytope yields a stable
+  multi-point face manifold, so discs pile in visible layers. Combined with a
+  scaled `lengthUnit` (contact tolerances tuned to cm-scale parts, not the
+  default 1 m), near-flat spawn orientation, and raised solver iterations.
+- **Overfull** now also trips when product backs up above the jaw plane (jammed
+  in the throat), not only when the counted fill line crosses it.
+
+### Known limitation — thin rigid discs
+
+Very thin rigid discs (e.g. ⌀30×4, a 7.5:1 aspect) remain a hard case for a
+real-time solver: coplanar prism faces still creep together under a tall stack's
+sustained load, so a fully-settled headless run can over-compress (implied
+packing > 1). In the interactive app — where the fixed-timestep budget clamps
+substeps under load, per the performance policy above — the pile renders as a
+believable stack. Thicker discs and non-disc shapes settle cleanly. Eliminating
+the residual creep would need substepping/contact-stiffness work that is out of
+scope for this pass; the structural fixes (containment, formed depth, seal) are
+independent of it.

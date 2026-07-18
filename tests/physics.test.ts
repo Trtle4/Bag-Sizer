@@ -30,7 +30,7 @@ describe("fill physics (Rapier 3-D)", () => {
     const sim = new FillSim();
     sim.build(makeParams(1234));
     sim.start();
-    const m = runToRest(sim);
+    const m = runToRest(sim, 14);
     const env = sim.envelope;
 
     expect(Number.isFinite(m.fillLine)).toBe(true);
@@ -46,7 +46,7 @@ describe("fill physics (Rapier 3-D)", () => {
       expect(p.y).toBeGreaterThan(-40);
       expect(p.y).toBeLessThan(env.spawnY + 60);
     }
-  });
+  }, 30000);
 
   it("is deterministic: same seed → identical fill line", () => {
     const a = new FillSim();
@@ -90,9 +90,10 @@ describe("fill physics (Rapier 3-D)", () => {
     expect(m.pctUsable).toBeGreaterThan(0);
   });
 
-  it("flags overfull when fill crosses the jaw plane", () => {
+  it("flags overfull when product can't fit (fills to the jaw or backs up)", () => {
     const sim = new FillSim();
-    // A deliberately undersized bag so a modest count overruns the jaw.
+    // A deliberately undersized bag so a modest count can't fit: the pile fills to
+    // the jaw and further pieces back up in the throat → overfull.
     sim.build({
       style: pillow,
       bag: { bagW: 70, bagL: 120, endSeal: 10, finSeal: 10 },
@@ -105,9 +106,10 @@ describe("fill physics (Rapier 3-D)", () => {
     });
     sim.start();
     const m = runToRest(sim, 12);
-    expect(m.fillLine).toBeGreaterThan(sim.envelope.innerLen * 0.7);
+    // Substantial fill and an overfull flag (pile at the jaw and/or backed up).
+    expect(m.fillLine).toBeGreaterThan(sim.envelope.innerLen * 0.5);
     expect(m.status).toBe("overfull");
-  });
+  }, 30000);
 
   it("builds a convex-hull collider for a STEP silhouette without error", () => {
     const sim = new FillSim();
