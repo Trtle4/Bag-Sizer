@@ -29,15 +29,17 @@ import type {
 function simProfile(p: BagParams, opts: SimProfileOpts): SimProfile {
   const st = opts.stiffNorm;
   const uhw = usableHalfWidth(p.bagW, st);
-  // Formed pillow depth: a fraction of the usable width; a stiffer film stays
-  // flatter (shallower), a limp film rounds out (deeper).
-  const usableHalfD = uhw * (0.62 - 0.14 * st);
+  // Formed pillow depth is the dimension stiffness governs most: a limp film
+  // rounds out into a deep belly (more volume → product settles low); a stiff
+  // film stays flat/planar (shallow → product stacks tall). This wide swing is
+  // what makes the stiffness slider visibly move fill height and headspace.
+  const usableHalfD = uhw * (1.0 - 0.7 * st);
   return {
     innerLen: innerLength(p.bagL, p.endSeal),
     usableHalfW: uhw,
     usableHalfD,
-    floorSagGain: 2.2 - 1.8 * st,
-    billowGain: 0.5 - 0.35 * st,
+    floorSagGain: 2.6 - 2.2 * st,
+    billowGain: 0.6 - 0.45 * st,
   };
 }
 

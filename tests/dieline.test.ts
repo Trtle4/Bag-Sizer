@@ -76,16 +76,18 @@ describe("pillow 3-D shell profile", () => {
     expect(prof.innerLen).toBe(210);
     // usableHalfWidth(140, 0.4) = 70 - (3 + 11*0.4) = 62.6
     expect(prof.usableHalfW).toBeCloseTo(62.6, 6);
-    // depth = usableHalfW * (0.62 - 0.14*0.4)
-    expect(prof.usableHalfD).toBeCloseTo(62.6 * (0.62 - 0.14 * 0.4), 6);
-    expect(prof.floorSagGain).toBeCloseTo(2.2 - 1.8 * 0.4, 6);
-    expect(prof.billowGain).toBeCloseTo(0.5 - 0.35 * 0.4, 6);
+    // depth = usableHalfW * (1.0 - 0.7*0.4)
+    expect(prof.usableHalfD).toBeCloseTo(62.6 * (1.0 - 0.7 * 0.4), 6);
+    expect(prof.floorSagGain).toBeCloseTo(2.6 - 2.2 * 0.4, 6);
+    expect(prof.billowGain).toBeCloseTo(0.6 - 0.45 * 0.4, 6);
   });
 
-  it("stiffer film → flatter (shallower) pillow and less billow", () => {
+  it("stiffer film → much flatter (shallower) pillow and less billow", () => {
     const limp = pillow.simProfile(P, { stiffNorm: 0.05 });
     const stiff = pillow.simProfile(P, { stiffNorm: 0.95 });
-    expect(stiff.usableHalfD / stiff.usableHalfW).toBeLessThan(limp.usableHalfD / limp.usableHalfW);
+    // Depth ratio swings hard with stiffness (drives the fill-height response).
+    expect(stiff.usableHalfD / stiff.usableHalfW).toBeLessThan(0.4);
+    expect(limp.usableHalfD / limp.usableHalfW).toBeGreaterThan(0.9);
     expect(stiff.billowGain).toBeLessThan(limp.billowGain);
   });
 });
