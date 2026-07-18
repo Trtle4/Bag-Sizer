@@ -169,6 +169,16 @@ export class SimRenderer {
         ctx.arc(0, 0, (p.w / 2) * sc, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
+      } else if (p.hull && p.hull.length >= 3) {
+        // STEP silhouette polygon (centred, mm), drawn to scale.
+        ctx.beginPath();
+        p.hull.forEach((v, i) => {
+          const m = i === 0 ? "moveTo" : "lineTo";
+          ctx[m](v.x * sc, v.y * sc);
+        });
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
       } else {
         const hw = (p.w / 2) * sc;
         const hh = (p.h / 2) * sc;

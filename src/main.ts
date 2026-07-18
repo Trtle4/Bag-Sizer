@@ -21,7 +21,10 @@ import { webWidth, innerLength, headspace as headspaceOf, fmt1, MAX_PIECES } fro
 import {
   exportDielineSvg,
   exportDielinePng,
+  exportDielineDxf,
+  exportDielinePdf,
   exportSpecSheet,
+  exportSpecCsv,
 } from "./export/index.js";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
@@ -55,7 +58,7 @@ function fillParams(s: AppState, seed: number): FillParams {
   return {
     style: getBagStyle(s.style),
     bag: bagParams(s),
-    product: { w: pd.w, h: pd.h, round: pd.round },
+    product: { w: pd.w, h: pd.h, round: pd.round, hull: pd.hull },
     unitWeight: s.pWt,
     count: fillCount(s),
     dropH: s.dropH,
@@ -125,9 +128,13 @@ const numFields: [string, keyof AppState][] = [
   ["bagL", "bagL"],
   ["endSeal", "endSeal"],
   ["finSeal", "finSeal"],
+  ["minHeadspace", "minHeadspace"],
+  ["jawClearance", "jawClearance"],
 ];
 // Fields that must be strictly positive (a zero/blank is a blocker).
 const positiveOnly = new Set(["pDia", "pThk", "pL", "pW", "pH", "pWt", "bagW", "bagL"]);
+// Advisory-only fields — changing them must not rebuild/reset the physics.
+const advisoryOnly = new Set(["minHeadspace", "jawClearance"]);
 
 for (const [id, key] of numFields) {
   const input = $<HTMLInputElement>(id);
@@ -138,7 +145,7 @@ for (const [id, key] of numFields) {
     wrap?.classList.toggle("invalid", !valid);
     if (valid) {
       store.set({ [key]: v } as unknown as Partial<AppState>);
-      onChange();
+      onChange(!advisoryOnly.has(id));
     }
   });
 }
@@ -209,12 +216,12 @@ $<HTMLInputElement>("fileStep").addEventListener("change", (e) => {
       hint.style.color = "var(--danger)";
       return;
     }
-    store.set({ stepDims: res.dims, stepName: f.name });
+    store.set({ stepDims: res.dims, stepName: f.name, stepHull: res.silhouette });
     $("upName").textContent = f.name;
     hint.style.color = "";
     hint.textContent = `BBOX ${fmt1(res.dims.l)} × ${fmt1(res.dims.w)} × ${fmt1(
       res.dims.h,
-    )} mm · ${res.pointCount.toLocaleString()} pts`;
+    )} mm · ${res.silhouette.length}-pt silhouette · ${res.pointCount.toLocaleString()} pts`;
     onChange();
   };
   rd.onerror = () => {
@@ -224,24 +231,62 @@ $<HTMLInputElement>("fileStep").addEventListener("change", (e) => {
   rd.readAsText(f);
 });
 
-// ---------- exports ----------
-$("btnExportDL").addEventListener("click", () => {
+// ---------- exports (dropdown menus) ----------
+function runDielineExport(fmt: string): void {
   const s = store.get();
-  exportDielineSvg(getBagStyle(s.style).dieline(bagParams(s)), s.bagW, s.bagL);
-});
-$("btnExportPNG").addEventListener("click", () => {
-  const s = store.get();
-  exportDielinePng(getBagStyle(s.style).dieline(bagParams(s)), s.bagW, s.bagL);
-});
-$("btnExportSpec").addEventListener("click", () => {
-  exportSpecSheet(store.get(), lastMeasure);
+  const model = getBagStyle(s.style).dieline(bagParams(s));
+  switch (fmt) {
+    case "svg": exportDielineSvg(model, s.bagW, s.bagL); break;
+    case "pdf": exportDielinePdf(model, s.bagW, s.bagL); break;
+    case "dxf": exportDielineDxf(model, s.bagW, s.bagL); break;
+    case "png150": exportDielinePng(model, s.bagW, s.bagL, 150); break;
+    case "png300": exportDielinePng(model, s.bagW, s.bagL, 300); break;
+    case "png600": exportDielinePng(model, s.bagW, s.bagL, 600); break;
+  }
+}
+function runSpecExport(fmt: string): void {
+  if (fmt === "txt") exportSpecSheet(store.get(), lastMeasure);
+  else if (fmt === "csv") exportSpecCsv(store.get(), lastMeasure);
+}
+
+function wireMenu(menuId: string, btnId: string, run: (fmt: string) => void): void {
+  const menu = $(menuId);
+  const btn = $(btnId);
+  const close = () => {
+    menu.classList.remove("open");
+    btn.setAttribute("aria-expanded", "false");
+  };
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const willOpen = !menu.classList.contains("open");
+    // Close any other open menu first.
+    document.querySelectorAll(".menu.open").forEach((m) => m.classList.remove("open"));
+    menu.classList.toggle("open", willOpen);
+    btn.setAttribute("aria-expanded", String(willOpen));
+  });
+  menu.querySelectorAll<HTMLButtonElement>(".menu-list button[data-fmt]").forEach((item) => {
+    item.addEventListener("click", () => {
+      run(item.dataset.fmt!);
+      close();
+    });
+  });
+}
+wireMenu("menuDieline", "btnExportDL", runDielineExport);
+wireMenu("menuSpec", "btnExportSpec", runSpecExport);
+// Dismiss menus on outside click / Escape.
+document.addEventListener("click", () =>
+  document.querySelectorAll(".menu.open").forEach((m) => m.classList.remove("open")),
+);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") document.querySelectorAll(".menu.open").forEach((m) => m.classList.remove("open"));
 });
 
 // ---------- readouts ----------
-function onChange(): void {
-  markDirty();
+function onChange(affectsPhysics = true): void {
+  if (affectsPhysics) markDirty();
   updateReadouts();
   advisories();
+  setStatusChip();
   if (store.get().view === "dieline") drawDieline();
 }
 
@@ -265,14 +310,21 @@ function updateReadouts(): void {
   $("msFill").textContent = `${n} pcs · ${fmt1(wt)} g`;
 }
 
+/** True when the fill has come within the user's jaw-clearance of the seal plane. */
+function jawViolation(s: AppState): boolean {
+  const innerLen = innerLength(s.bagL, s.endSeal);
+  return sim.particleCount > 0 && lastMeasure.fillLine > innerLen - s.jawClearance;
+}
+
 function setStatusChip(): void {
+  const s = store.get();
   const chip = $("statusChip");
   const tx = $("statusTxt");
   const st = lastMeasure.status;
   chip.classList.remove("filling", "blocked");
-  if (st === "overfull") {
+  if (st === "overfull" || jawViolation(s)) {
     chip.classList.add("blocked");
-    tx.textContent = "Overfull";
+    tx.textContent = st === "overfull" ? "Overfull" : "Jaw risk";
   } else if (st === "filling") {
     chip.classList.add("filling");
     tx.textContent = "Filling…";
@@ -282,7 +334,6 @@ function setStatusChip(): void {
     tx.textContent = "Ready";
   }
   $("msStatus").textContent = "● " + tx.textContent;
-  advisories();
 }
 
 function advisories(): void {
@@ -293,10 +344,14 @@ function advisories(): void {
   let out = "";
   if (lastMeasure.status === "overfull") {
     out += `<div class="advisory danger"><span class="ic">✕</span><span>Fill exceeds the seal jaw plane — lengthen the bag, widen it, or reduce the fill.</span></div>`;
-  } else if (lastMeasure.status === "settled" && hs < 30) {
+  } else if (jawViolation(s)) {
+    out += `<div class="advisory danger"><span class="ic">✕</span><span>Fill is within the ${fmt1(
+      s.jawClearance,
+    )} mm jaw clearance — risks product in the seal jaws.</span></div>`;
+  } else if (lastMeasure.status === "settled" && hs < s.minHeadspace) {
     out += `<div class="advisory"><span class="ic">!</span><span>Headspace ${fmt1(
       hs,
-    )} mm after settling — under 30 mm risks product in the seal jaws.</span></div>`;
+    )} mm after settling — under the ${fmt1(s.minHeadspace)} mm minimum.</span></div>`;
   }
   if (fillCount(s) >= MAX_PIECES) {
     out += `<div class="advisory"><span class="ic">!</span><span>Count capped at ${MAX_PIECES} pieces for the live simulation.</span></div>`;
@@ -315,13 +370,18 @@ function liveReadouts(m: Measurements): void {
     hsEl.textContent = "—";
   } else if (hs < 0) {
     hsEl.innerHTML = `<span class="dv">${fmt1(hs)} mm</span>`;
-  } else if (m.status === "settled" && hs < 30) {
+  } else if (m.status === "settled" && hs < s.minHeadspace) {
     hsEl.innerHTML = `<span class="wv">${fmt1(hs)} mm</span>`;
   } else {
     hsEl.innerHTML = `<b>${fmt1(hs)} mm</b>`;
   }
   $("msFH").textContent = has ? fmt1(m.fillLine) + " mm" : "—";
   $("msHS").textContent = has ? fmt1(hs) + " mm" : "—";
+
+  const vol = has ? `${fmt1(m.fillVolume / 1000)} cm³ · ${fmt1(m.pctUsable)}%` : "—";
+  $("tbVol").textContent = vol;
+  $("msVol").textContent = has ? `${fmt1(m.fillVolume / 1000)} cm³` : "—";
+  $("msPct").textContent = has ? `${fmt1(m.pctUsable)} %` : "—";
 }
 
 // ---------- main loop ----------
@@ -353,9 +413,12 @@ function frame(now: number): void {
     });
   }
   liveReadouts(lastMeasure);
-  if (lastMeasure.status !== prevStatus) {
-    prevStatus = lastMeasure.status;
+  // Refresh the chip when either the physics status or the jaw-risk flag flips.
+  const statusKey = `${lastMeasure.status}|${jawViolation(store.get())}`;
+  if (statusKey !== prevStatus) {
+    prevStatus = statusKey;
     setStatusChip();
+    advisories();
   }
   requestAnimationFrame(frame);
 }

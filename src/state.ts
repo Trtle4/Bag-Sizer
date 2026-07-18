@@ -23,6 +23,8 @@ export interface AppState {
   pH: number;
   stepDims: { l: number; w: number; h: number } | null;
   stepName: string | null;
+  /** Centred XZ silhouette polygon (mm) from the STEP point cloud. */
+  stepHull: { x: number; y: number }[] | null;
   pWt: number;
 
   mode: FillMode;
@@ -37,6 +39,11 @@ export interface AppState {
   finSeal: number;
 
   stiff: number;
+
+  /** Advisory: minimum acceptable settled headspace (mm). */
+  minHeadspace: number;
+  /** Safety: fill must stay at least this far below the seal-jaw plane (mm). */
+  jawClearance: number;
 
   view: ViewId;
   showDims: boolean;
@@ -54,6 +61,7 @@ export const initialState: AppState = {
   pH: 14,
   stepDims: null,
   stepName: null,
+  stepHull: null,
   pWt: 8.0,
 
   mode: "count",
@@ -68,6 +76,9 @@ export const initialState: AppState = {
   finSeal: 10,
 
   stiff: 40,
+
+  minHeadspace: 30,
+  jawClearance: 30,
 
   view: "fill",
   showDims: true,
@@ -113,10 +124,12 @@ export function prodDims(s: AppState): ProdDims {
     return { w: s.pDia, h: s.pThk, round: true, label: `⌀${fmt(s.pDia)} × ${fmt(s.pThk)}` };
   }
   const d = s.shape === "step" && s.stepDims ? s.stepDims : { l: s.pL, w: s.pW, h: s.pH };
+  const hull = s.shape === "step" && s.stepHull ? s.stepHull : undefined;
   return {
     w: d.l,
     h: d.h,
     round: false,
+    hull,
     label: `${fmt(d.l)} × ${fmt(d.w)} × ${fmt(d.h)}`,
   };
 }

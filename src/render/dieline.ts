@@ -18,6 +18,8 @@ export interface RenderedDieline {
   viewBox: string;
   width: number;
   height: number;
+  /** mm → SVG-unit scale, so raster exporters can hit a target DPI. */
+  scale: number;
 }
 
 const DEFS = `
@@ -71,7 +73,7 @@ export function renderDieline(model: DielineModel): RenderedDieline {
 
   const inner = DEFS + parts.join("\n");
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}">${STYLE}${inner}</svg>`;
-  return { svg, inner: STYLE + inner, viewBox, width: vbW, height: vbH };
+  return { svg, inner: STYLE + inner, viewBox, width: vbW, height: vbH, scale: sc };
 }
 
 function renderEntity(

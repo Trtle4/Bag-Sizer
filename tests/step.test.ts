@@ -38,4 +38,21 @@ describe("STEP bbox parsing", () => {
     expect(a.pointCount).toBe(b.pointCount);
     expect(a.dims).toEqual(b.dims);
   });
+
+  it("builds a projected XZ silhouette (≤16 verts, centred)", () => {
+    const r = parseStepBBox(cube);
+    expect(r.silhouette.length).toBeGreaterThanOrEqual(3);
+    expect(r.silhouette.length).toBeLessThanOrEqual(16);
+    // Cube XZ projection is a 20 × 6 rectangle → 4-vertex hull.
+    expect(r.silhouette).toHaveLength(4);
+    const cx = r.silhouette.reduce((s, p) => s + p.x, 0) / r.silhouette.length;
+    const cy = r.silhouette.reduce((s, p) => s + p.y, 0) / r.silhouette.length;
+    expect(cx).toBeCloseTo(0, 6);
+    expect(cy).toBeCloseTo(0, 6);
+    // Extent matches X (20) × Z (6).
+    const xs = r.silhouette.map((p) => p.x);
+    const ys = r.silhouette.map((p) => p.y);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(20, 6);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(6, 6);
+  });
 });

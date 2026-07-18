@@ -20,9 +20,24 @@
     </div>
     <div class="spacer"></div>
     <span class="ready" id="statusChip"><span class="dot"></span><span id="statusTxt">Ready</span></span>
-    <button class="btn primary" id="btnExportDL"><span class="ic">↓</span>Export dieline</button>
-    <button class="btn sec" id="btnExportPNG"><span class="ic">↓</span>PNG</button>
-    <button class="btn sec" id="btnExportSpec"><span class="ic">↓</span>Spec sheet</button>
+    <div class="menu" id="menuDieline">
+      <button class="btn primary" id="btnExportDL" aria-haspopup="true" aria-expanded="false"><span class="ic">↓</span>Export dieline<span class="caret">▾</span></button>
+      <div class="menu-list" role="menu">
+        <button role="menuitem" data-fmt="svg">SVG · vector</button>
+        <button role="menuitem" data-fmt="pdf">PDF · 1:1 mm</button>
+        <button role="menuitem" data-fmt="dxf">DXF · R12</button>
+        <button role="menuitem" data-fmt="png150">PNG · 150 dpi</button>
+        <button role="menuitem" data-fmt="png300">PNG · 300 dpi</button>
+        <button role="menuitem" data-fmt="png600">PNG · 600 dpi</button>
+      </div>
+    </div>
+    <div class="menu" id="menuSpec">
+      <button class="btn sec" id="btnExportSpec" aria-haspopup="true" aria-expanded="false"><span class="ic">↓</span>Spec sheet<span class="caret">▾</span></button>
+      <div class="menu-list" role="menu">
+        <button role="menuitem" data-fmt="txt">Text · .txt</button>
+        <button role="menuitem" data-fmt="csv">CSV · .csv</button>
+      </div>
+    </div>
   </header>
 
   <div class="body">
@@ -121,6 +136,15 @@
           <div class="hint">First-order film model — limp film absorbs the drop and conforms; stiff film bounces product and tucks less at the edges.</div>
         </div>
       </section>
+
+      <section class="group">
+        <div class="eyebrow"><span class="n">05</span> Limits</div>
+        <div class="row2">
+          <div class="field"><label>Min headspace</label><div class="in"><input id="minHeadspace" value="30" inputmode="decimal"/><span class="unit">mm</span></div></div>
+          <div class="field"><label>Jaw clearance</label><div class="in"><input id="jawClearance" value="30" inputmode="decimal"/><span class="unit">mm</span></div></div>
+        </div>
+        <div class="hint">Min headspace flags a low settled air gap. Jaw clearance is the hard safety margin below the seal-jaw plane.</div>
+      </section>
     </aside>
 
     <!-- viewport -->
@@ -151,6 +175,7 @@
         <div class="tbrow"><div class="k">Fill</div><div class="v" id="tbFill">18 pcs · 144 g</div></div>
         <div class="tbrow"><div class="k">Fill height</div><div class="v" id="tbFH">—</div></div>
         <div class="tbrow"><div class="k">Headspace</div><div class="v" id="tbHS">—</div></div>
+        <div class="tbrow"><div class="k">Fill vol · %</div><div class="v" id="tbVol">—</div></div>
         <div class="tbrow"><div class="k">Film</div><div class="v" id="tbFilm">Stiffness 40 · Med</div></div>
       </div>
 
@@ -165,6 +190,8 @@
         <div><span>Fill</span><b id="msFill">18 pcs · 144 g</b></div>
         <div><span>Fill height</span><b id="msFH">—</b></div>
         <div><span>Headspace</span><b id="msHS">—</b></div>
+        <div><span>Fill vol</span><b id="msVol">—</b></div>
+        <div><span>% usable</span><b id="msPct">—</b></div>
       </div>
     </div>
   </div>

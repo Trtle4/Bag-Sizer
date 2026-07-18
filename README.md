@@ -44,8 +44,13 @@ src/
 
 ## Physics model — assumptions
 
-This is a **first-order 2-D front-view** model, not a rigorous granular
-simulation. Stated plainly:
+> **Phase 1–2: 2-D.** The current fill sim is a **first-order 2-D front-view**
+> model on matter-js — a flat slice, not full 3-D packing. **Phase 3 migrates
+> to a 3-D engine (Rapier3D + Three.js)** with 3-D rigid product and a
+> quasi-static parametric film shell — see
+> [`docs/ADR-001-physics.md`](docs/ADR-001-physics.md).
+
+Stated plainly, the current model:
 
 - The world is millimetres, front view only. Product is modelled as **circles**
   (round) or **rounded rectangles** (square/STEP) — true box collisions.
@@ -66,6 +71,8 @@ simulation. Stated plainly:
 
 ## Roadmap (phased)
 
-1. **Scaffold + parity** on the new stack — this build.
-2. Exports (PDF 1:1 mm, DXF R12, CSV) + STEP silhouette + editable limits group.
-3. Polish: perf, mobile, determinism toggle.
+1. **Scaffold + parity** on the new stack — done.
+2. Exports (PDF 1:1 mm, DXF R12, CSV) + STEP silhouette + editable `05 Limits`
+   group. Physics-independent.
+3. **Rapier3D + Three.js** 3-D physics migration (ADR-001), with the polish pass
+   (perf, mobile, determinism toggle) folded in.

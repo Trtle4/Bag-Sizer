@@ -44,6 +44,11 @@ export interface ProductSpec {
   h: number;
   /** true → circle body of radius w/2; false → rounded rectangle. */
   round: boolean;
+  /**
+   * Optional centred convex silhouette (mm) for STEP parts — used as the
+   * collision body and rendered shape in place of the bounding rectangle.
+   */
+  hull?: { x: number; y: number }[];
 }
 
 export interface FillParams {
@@ -77,6 +82,8 @@ export interface ParticleSample {
   w: number;
   h: number;
   r: number;
+  /** Centred silhouette polygon (mm) for STEP parts, else undefined. */
+  hull?: { x: number; y: number }[];
 }
 
 export interface Measurements {
@@ -390,10 +397,16 @@ export class FillSim {
       restitution: 0.05 + 0.2 * clamp01(this.params.stiff / 100),
       density,
     };
-    let body: MBody;
+    let body: MBody | null = null;
     if (p.round) {
       body = Bodies.circle(m.x, m.y, Math.max(2, p.w / 2), common);
-    } else {
+    } else if (p.hull && p.hull.length >= 3) {
+      // STEP silhouette: a single convex polygon needs no decomposition.
+      body = Bodies.fromVertices(m.x, m.y, [p.hull], common);
+      // fromVertices returns an empty/degenerate body on failure → fall back.
+      if (!body || !body.vertices || body.vertices.length < 3) body = null;
+    }
+    if (!body) {
       const r = Math.min(p.w, p.h) * 0.28;
       body = Bodies.rectangle(m.x, m.y, Math.max(2, p.w), Math.max(2, p.h), {
         ...common,
@@ -494,6 +507,7 @@ export class FillSim {
       w: p.w,
       h: p.h,
       r: p.round ? p.w / 2 : 0,
+      hull: p.hull,
     }));
   }
 
