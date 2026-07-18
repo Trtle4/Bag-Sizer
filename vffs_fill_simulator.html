@@ -1,0 +1,1141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>VFFS Fill Simulator — design concept</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#E9EDF0; --panel:#FFFFFF; --panel-2:#F3F6F8; --recess:#E7ECEF;
+  --ink:#192227; --ink-2:#59656C; --ink-3:#8A959B;
+  --line:#D2D9DE; --line-2:#E3E8EB; --grid:#DBE1E6;
+  --accent:#0F6E77; --accent-2:#0B565D; --accent-soft:#E0F0F1;
+  --valid:#2F7D5B; --warn:#B0740F; --warn-soft:#FBF0D8;
+  --danger:#B23A2E; --danger-soft:#FBE4E1;
+  --product:#C89468; --product-edge:#A9754C;
+  --film:#8FA0A8;
+  --sans:"Hanken Grotesk",system-ui,sans-serif;
+  --mono:"DM Mono",ui-monospace,monospace;
+  --r:9px; --r-sm:6px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  font-family:var(--sans); color:var(--ink); background:var(--paper);
+  font-size:14px; line-height:1.45; -webkit-font-smoothing:antialiased;
+}
+.app{display:flex; flex-direction:column; height:100vh; min-height:0}
+
+/* ---------- header ---------- */
+.header{
+  display:flex; align-items:center; gap:20px;
+  padding:0 20px; height:56px; background:var(--panel);
+  border-bottom:1px solid var(--line);
+}
+.brand{display:flex; align-items:baseline; gap:10px}
+.brand h1{font-size:16px; font-weight:600; letter-spacing:-.01em; margin:0}
+.brand .part{
+  font-family:var(--mono); font-size:11px; color:var(--ink-3);
+  letter-spacing:.04em; padding:2px 7px; border:1px solid var(--line);
+  border-radius:20px;
+}
+.header .spacer{flex:1}
+.ready{
+  display:flex; align-items:center; gap:7px; font-size:12px; color:var(--valid);
+  font-weight:500; margin-right:4px; white-space:nowrap;
+}
+.ready .dot{width:7px;height:7px;border-radius:50%;background:var(--valid);
+  box-shadow:0 0 0 3px rgba(47,125,91,.15)}
+.ready.filling{color:var(--accent-2)}
+.ready.filling .dot{background:var(--accent); box-shadow:0 0 0 3px var(--accent-soft)}
+.ready.blocked{color:var(--danger)}
+.ready.blocked .dot{background:var(--danger); box-shadow:0 0 0 3px rgba(178,58,46,.15)}
+.btn{
+  font-family:var(--sans); font-size:13px; font-weight:500; cursor:pointer;
+  padding:8px 15px; border-radius:var(--r-sm); border:1px solid var(--line);
+  background:var(--panel); color:var(--ink); transition:.15s;
+}
+.btn:hover{border-color:var(--ink-3)}
+.btn.primary{background:var(--accent); border-color:var(--accent); color:#fff}
+.btn.primary:hover{background:var(--accent-2); border-color:var(--accent-2)}
+.btn .ic{font-family:var(--mono); opacity:.75; margin-right:6px}
+
+/* ---------- body ---------- */
+.body{display:flex; flex:1; min-height:0}
+
+/* ---------- control column ---------- */
+.controls{
+  width:322px; flex:none; background:var(--panel);
+  border-right:1px solid var(--line); overflow:auto; padding:6px 0 40px;
+}
+.group{padding:16px 20px 4px; border-top:1px solid var(--line-2)}
+.group:first-child{border-top:none}
+.eyebrow{
+  font-family:var(--mono); font-size:10.5px; font-weight:500; text-transform:uppercase;
+  letter-spacing:.13em; color:var(--ink-3); margin-bottom:12px;
+  display:flex; align-items:center; gap:8px;
+}
+.eyebrow .n{color:var(--accent)}
+.field{margin-bottom:13px}
+.field > label{display:block; font-size:12.5px; font-weight:500; color:var(--ink-2); margin-bottom:5px}
+.field .in{
+  display:flex; align-items:center; background:var(--panel);
+  border:1px solid var(--line); border-radius:var(--r-sm); overflow:hidden;
+  transition:.15s;
+}
+.field .in:focus-within{border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft)}
+.field .in input{
+  flex:1; border:none; outline:none; background:transparent;
+  font-family:var(--mono); font-size:13px; font-weight:500; color:var(--ink);
+  font-variant-numeric:tabular-nums;
+  padding:8px 10px; width:100%; min-width:0;
+}
+.field .in .unit{
+  font-family:var(--mono); font-size:11.5px; color:var(--ink-3);
+  padding:0 10px; border-left:1px solid var(--line-2); align-self:stretch;
+  display:flex; align-items:center; white-space:nowrap;
+}
+.row2{display:grid; grid-template-columns:1fr 1fr; gap:11px}
+.row3{display:grid; grid-template-columns:1fr 1fr 1fr; gap:11px}
+.hint{font-family:var(--mono); font-size:11px; color:var(--ink-3); margin-top:4px; line-height:1.4}
+
+/* segmented */
+.seg{display:flex; background:var(--recess); border-radius:var(--r-sm); padding:3px; gap:3px}
+.seg button{
+  flex:1; border:none; background:transparent; cursor:pointer; padding:6px 8px;
+  font-family:var(--sans); font-size:12.5px; font-weight:500; color:var(--ink-2);
+  border-radius:4px; transition:.15s; white-space:nowrap;
+}
+.seg button.on{background:var(--panel); color:var(--ink); box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.seg button:disabled{opacity:.4; cursor:not-allowed}
+
+/* stiffness slider */
+.slider{display:flex; align-items:center; gap:10px}
+.slider input[type=range]{
+  -webkit-appearance:none; appearance:none; flex:1; height:4px;
+  background:linear-gradient(90deg, var(--accent) var(--pct,40%), var(--recess) var(--pct,40%));
+  border-radius:2px; outline:none; cursor:pointer; margin:10px 0;
+}
+.slider input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none; appearance:none; width:16px; height:16px; border-radius:50%;
+  background:var(--panel); border:2px solid var(--accent); box-shadow:0 1px 3px rgba(0,0,0,.15);
+}
+.slider input[type=range]::-moz-range-thumb{
+  width:14px; height:14px; border-radius:50%;
+  background:var(--panel); border:2px solid var(--accent); box-shadow:0 1px 3px rgba(0,0,0,.15);
+}
+.slider input[type=range]:focus-visible{box-shadow:0 0 0 3px var(--accent-soft)}
+.slider .sval{
+  font-family:var(--mono); font-size:12px; font-weight:500; color:var(--ink);
+  font-variant-numeric:tabular-nums; width:64px; text-align:right; flex:none;
+}
+.slider-ends{
+  display:flex; justify-content:space-between; margin-top:-4px;
+  font-family:var(--mono); font-size:10px; letter-spacing:.06em;
+  text-transform:uppercase; color:var(--ink-3);
+}
+
+/* upload */
+.upbtn{
+  width:100%; text-align:left; display:flex; align-items:center; gap:8px;
+  font-family:var(--mono); font-size:12px;
+}
+.upbtn .uic{color:var(--accent); font-weight:600}
+
+/* advisory */
+.advisory{
+  display:flex; gap:8px; align-items:flex-start; margin:7px 0 13px;
+  background:var(--warn-soft); border:1px solid #EAD9A8; border-radius:var(--r-sm);
+  padding:7px 9px; font-size:11.5px; color:#7a5209; line-height:1.35;
+}
+.advisory .ic{font-family:var(--mono); color:var(--warn); font-weight:600}
+.advisory.danger{background:var(--danger-soft); border-color:#EABFB9; color:#7d2318}
+.advisory.danger .ic{color:var(--danger)}
+
+/* ---------- viewport ---------- */
+.viewport{
+  position:relative; flex:1; min-width:0; overflow:hidden;
+  background:
+    radial-gradient(120% 90% at 50% 0%, #F4F7F8 0%, #E4E9ED 70%, #DCE2E7 100%);
+}
+.viewport .grid{
+  position:absolute; inset:0;
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size:24px 24px; opacity:.55; pointer-events:none;
+  mask-image:radial-gradient(130% 100% at 50% 40%, #000 55%, transparent 100%);
+  -webkit-mask-image:radial-gradient(130% 100% at 50% 40%, #000 55%, transparent 100%);
+}
+.toolbar{
+  position:absolute; top:16px; left:50%; transform:translateX(-50%);
+  display:flex; gap:6px; align-items:center; z-index:4;
+  background:var(--panel); border:1px solid var(--line); border-radius:10px;
+  padding:5px; box-shadow:0 4px 16px rgba(20,30,40,.08);
+  max-width:calc(100% - 24px); flex-wrap:wrap; justify-content:center;
+}
+.toolbar .tseg{display:flex; gap:2px; padding-right:5px; border-right:1px solid var(--line-2)}
+.tbtn{
+  border:none; background:transparent; cursor:pointer; border-radius:6px;
+  font-family:var(--sans); font-size:12.5px; font-weight:500; color:var(--ink-2);
+  padding:7px 11px; min-height:34px; transition:.15s;
+}
+.tbtn:hover{background:var(--panel-2)}
+.tbtn.on{background:var(--accent-soft); color:var(--accent-2)}
+.tbtn.go{color:var(--accent-2); font-weight:600}
+.tbtn .ic{font-family:var(--mono); margin-right:5px}
+
+.sheet{position:absolute; inset:0}
+canvas#sim{position:absolute; inset:0; width:100%; height:100%; display:block}
+#dielineWrap{
+  position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+  padding:70px 40px 40px;
+}
+#dielineWrap.show{display:flex}
+#dielineWrap svg{max-width:100%; max-height:100%; overflow:visible}
+
+/* title block */
+.titleblock{
+  position:absolute; right:22px; bottom:22px; z-index:3; width:278px;
+  background:var(--panel); border:1px solid var(--ink); border-radius:4px;
+  box-shadow:0 6px 22px rgba(20,30,40,.12); overflow:hidden;
+  font-family:var(--mono);
+}
+.titleblock .tbhead{
+  display:flex; justify-content:space-between; align-items:center;
+  background:var(--ink); color:#fff; padding:6px 10px; font-size:10.5px;
+  letter-spacing:.1em; text-transform:uppercase;
+}
+.tbrow{display:flex; border-top:1px solid var(--line); font-size:12px}
+.tbrow:first-of-type{border-top:none}
+.tbrow .k{
+  width:96px; flex:none; padding:6px 10px; color:var(--ink-3);
+  font-size:10px; letter-spacing:.06em; text-transform:uppercase;
+  border-right:1px solid var(--line-2); display:flex; align-items:center;
+}
+.tbrow .v{padding:6px 10px; color:var(--ink); font-weight:500; font-variant-numeric:tabular-nums}
+.tbrow .v b{color:var(--accent-2); font-weight:500}
+.tbrow .v .wv{color:var(--warn)}
+.tbrow .v .dv{color:var(--danger)}
+
+.scalechip{
+  position:absolute; left:22px; bottom:22px; z-index:3;
+  font-family:var(--mono); font-size:11px; color:var(--ink-3);
+  background:var(--panel); border:1px solid var(--line); border-radius:20px;
+  padding:5px 12px;
+}
+
+/* dieline svg text */
+.dl-dim{font-family:var(--mono); font-size:11px; fill:var(--ink-2); font-weight:500}
+.dl-lab{font-family:var(--mono); font-size:10px; fill:var(--ink-3); letter-spacing:.12em}
+.dl-lab.b{fill:var(--ink-2)}
+
+.mobile-spec{display:none}
+
+@media (max-width:820px){
+  .body{flex-direction:column}
+  .controls{width:100%; border-right:none; border-bottom:1px solid var(--line); max-height:44vh}
+  .viewport{min-height:52vh}
+  .titleblock{display:none}
+  .scalechip{left:12px; bottom:12px}
+  .header{gap:10px; padding:0 12px}
+  .header .btn.sec{display:none}
+  .mobile-spec{
+    display:block; background:var(--panel); border-top:1px solid var(--line);
+    padding:12px 16px 16px;
+  }
+  .ms-head{
+    display:flex; justify-content:space-between; align-items:center;
+    font-family:var(--mono); font-size:11px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--ink-2); margin-bottom:10px;
+  }
+  .ms-ready{color:var(--valid)}
+  .ms-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+  .ms-grid > div{
+    background:var(--panel-2); border:1px solid var(--line-2); border-radius:var(--r-sm);
+    padding:8px 10px; display:flex; flex-direction:column; gap:2px;
+  }
+  .ms-grid span{font-size:10px; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-3)}
+  .ms-grid b{font-family:var(--mono); font-size:13px; font-weight:500; color:var(--ink); font-variant-numeric:tabular-nums}
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none !important}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- header -->
+  <header class="header">
+    <div class="brand">
+      <h1>VFFS Fill Simulator</h1>
+      <span class="part">VF-101 · REV A</span>
+    </div>
+    <div class="spacer"></div>
+    <span class="ready" id="statusChip"><span class="dot"></span><span id="statusTxt">Ready</span></span>
+    <button class="btn primary" id="btnExportDL"><span class="ic">↓</span>Export dieline</button>
+    <button class="btn sec" id="btnExportPNG"><span class="ic">↓</span>PNG</button>
+    <button class="btn sec" id="btnExportSpec"><span class="ic">↓</span>Spec sheet</button>
+  </header>
+
+  <div class="body">
+
+    <!-- control column -->
+    <aside class="controls">
+
+      <section class="group">
+        <div class="eyebrow"><span class="n">01</span> Product</div>
+        <div class="field">
+          <label>Geometry</label>
+          <div class="seg" id="segShape">
+            <button data-v="round" class="on">Round</button>
+            <button data-v="square">Square</button>
+            <button data-v="step">STEP</button>
+          </div>
+        </div>
+
+        <div id="shapeRound">
+          <div class="row2">
+            <div class="field"><label>Diameter</label><div class="in"><input id="pDia" value="30" inputmode="decimal"/><span class="unit">mm</span></div></div>
+            <div class="field"><label>Thickness</label><div class="in"><input id="pThk" value="12" inputmode="decimal"/><span class="unit">mm</span></div></div>
+          </div>
+        </div>
+
+        <div id="shapeSquare" style="display:none">
+          <div class="row3">
+            <div class="field"><label>Length</label><div class="in"><input id="pL" value="30" inputmode="decimal"/><span class="unit">mm</span></div></div>
+            <div class="field"><label>Width</label><div class="in"><input id="pW" value="22" inputmode="decimal"/><span class="unit">mm</span></div></div>
+            <div class="field"><label>Height</label><div class="in"><input id="pH" value="14" inputmode="decimal"/><span class="unit">mm</span></div></div>
+          </div>
+        </div>
+
+        <div id="shapeStep" style="display:none">
+          <div class="field">
+            <label>Model file</label>
+            <button class="btn upbtn" id="btnUpload"><span class="uic">⇪</span><span id="upName">Upload .stp / .step</span></button>
+            <input type="file" id="fileStep" accept=".stp,.step,.STP,.STEP" style="display:none"/>
+            <div class="hint" id="stepHint">Bounding box is read from the model's point cloud and used as the product envelope.</div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Unit weight</label>
+          <div class="in"><input id="pWt" value="8.0" inputmode="decimal"/><span class="unit">g</span></div>
+        </div>
+      </section>
+
+      <section class="group">
+        <div class="eyebrow"><span class="n">02</span> Fill</div>
+        <div class="field">
+          <label>Target by</label>
+          <div class="seg" id="segMode">
+            <button data-v="count" class="on">Count</button>
+            <button data-v="weight">Weight</button>
+          </div>
+        </div>
+        <div class="row2">
+          <div class="field" id="fCount"><label>Count</label><div class="in"><input id="nCount" value="18" inputmode="numeric"/><span class="unit">pcs</span></div></div>
+          <div class="field" id="fWeight" style="display:none"><label>Target weight</label><div class="in"><input id="nWt" value="150" inputmode="decimal"/><span class="unit">g</span></div></div>
+          <div class="field"><label>Drop height</label><div class="in"><input id="dropH" value="250" inputmode="decimal"/><span class="unit">mm</span></div></div>
+        </div>
+        <div class="hint" id="fillHint"></div>
+      </section>
+
+      <section class="group">
+        <div class="eyebrow"><span class="n">03</span> Bag</div>
+        <div class="field">
+          <label>Style</label>
+          <div class="seg">
+            <button class="on">Pillow</button>
+            <button disabled title="Coming soon">Gusseted</button>
+            <button disabled title="Coming soon">SUP</button>
+          </div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Bag width</label><div class="in"><input id="bagW" value="140" inputmode="decimal"/><span class="unit">mm</span></div></div>
+          <div class="field"><label>Bag length</label><div class="in"><input id="bagL" value="230" inputmode="decimal"/><span class="unit">mm</span></div></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>End seal</label><div class="in"><input id="endSeal" value="10" inputmode="decimal"/><span class="unit">mm</span></div></div>
+          <div class="field"><label>Fin seal</label><div class="in"><input id="finSeal" value="10" inputmode="decimal"/><span class="unit">mm</span></div></div>
+        </div>
+        <div id="advisories"></div>
+      </section>
+
+      <section class="group">
+        <div class="eyebrow"><span class="n">04</span> Film</div>
+        <div class="field">
+          <label>Stiffness</label>
+          <div class="slider">
+            <input type="range" id="stiff" min="0" max="100" value="40"/>
+            <span class="sval" id="stiffVal">40 · Med</span>
+          </div>
+          <div class="slider-ends"><span>Limp</span><span>Stiff</span></div>
+          <div class="hint">First-order film model — limp film absorbs the drop and conforms; stiff film bounces product and tucks less at the edges.</div>
+        </div>
+      </section>
+    </aside>
+
+    <!-- viewport -->
+    <main class="viewport">
+      <div class="grid"></div>
+
+      <div class="toolbar">
+        <div class="tseg">
+          <button class="tbtn on" id="vwFill">Fill</button>
+          <button class="tbtn" id="vwDieline">Dieline</button>
+        </div>
+        <button class="tbtn go" id="btnDrop"><span class="ic">▶</span>Drop</button>
+        <button class="tbtn" id="btnReset"><span class="ic">↺</span>Reset</button>
+        <button class="tbtn on" id="btnDims">Dims</button>
+      </div>
+
+      <div class="sheet">
+        <canvas id="sim"></canvas>
+        <div id="dielineWrap"><svg id="dielineSvg" xmlns="http://www.w3.org/2000/svg"></svg></div>
+      </div>
+
+      <!-- engineering title block -->
+      <div class="titleblock">
+        <div class="tbhead"><span>Pillow Bag</span><span id="tbTag">VFFS</span></div>
+        <div class="tbrow"><div class="k">Bag W × L</div><div class="v" id="tbBag"><b>140 × 230</b> mm</div></div>
+        <div class="tbrow"><div class="k">Web × Cut</div><div class="v" id="tbWeb">300 × 230 mm</div></div>
+        <div class="tbrow"><div class="k">Product</div><div class="v" id="tbProd">⌀30 × 12</div></div>
+        <div class="tbrow"><div class="k">Fill</div><div class="v" id="tbFill">18 pcs · 144 g</div></div>
+        <div class="tbrow"><div class="k">Fill height</div><div class="v" id="tbFH">—</div></div>
+        <div class="tbrow"><div class="k">Headspace</div><div class="v" id="tbHS">—</div></div>
+        <div class="tbrow"><div class="k">Film</div><div class="v" id="tbFilm">Stiffness 40 · Med</div></div>
+      </div>
+
+      <div class="scalechip" id="scalechip">Front view · live sim · mm</div>
+    </main>
+
+    <!-- mobile spec -->
+    <div class="mobile-spec">
+      <div class="ms-head"><span>Pillow bag · VFFS</span><span class="ms-ready" id="msStatus">● Ready</span></div>
+      <div class="ms-grid">
+        <div><span>Bag W × L</span><b id="msBag">140 × 230 mm</b></div>
+        <div><span>Fill</span><b id="msFill">18 pcs · 144 g</b></div>
+        <div><span>Fill height</span><b id="msFH">—</b></div>
+        <div><span>Headspace</span><b id="msHS">—</b></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* =========================================================
+   VFFS Fill Simulator — pillow bag
+   Units: world space is mm, y-up, origin at bag inner floor
+   center. First-order 2-D front-view physics.
+========================================================= */
+
+const $ = id => document.getElementById(id);
+
+const S = {
+  shape:'round',
+  pDia:30, pThk:12,
+  pL:30, pW:22, pH:14,
+  stepDims:null, stepName:null,
+  pWt:8.0,
+  mode:'count', nCount:18, nWt:150,
+  dropH:250,
+  bagW:140, bagL:230, endSeal:10, finSeal:10,
+  stiff:40,
+  view:'fill', showDims:true
+};
+
+/* ---------- derived ---------- */
+function stiff01(){ return S.stiff/100 }
+function stiffLabel(){ const s=S.stiff; return s<34?'Limp':(s<67?'Med':'Stiff') }
+function fillCount(){
+  const n = S.mode==='count' ? Math.round(S.nCount)
+          : Math.max(1, Math.ceil(S.nWt/Math.max(0.01,S.pWt)));
+  return Math.max(1, Math.min(200, n||1));
+}
+function fillWeight(){ return fillCount()*S.pWt }
+function innerLen(){ return Math.max(10, S.bagL - 2*S.endSeal) } // open-top fill zone
+function edgeTuck(){ return 3 + 11*stiff01() }                    // stiffer film tucks less
+function usableHalfW(){ return Math.max(8, S.bagW/2 - edgeTuck()) }
+function prodDims(){ // {w,h,r,label} in the front view
+  if(S.shape==='round') return {w:S.pDia, h:S.pThk, r:S.pDia/2, round:true,
+    label:`⌀${fmt(S.pDia)} × ${fmt(S.pThk)}`};
+  const d = S.shape==='step' && S.stepDims ? S.stepDims : {l:S.pL,w:S.pW,h:S.pH};
+  const w = d.l, h = d.h;
+  return {w, h, r: Math.hypot(w,h)/2*0.72, round:false,
+    label:`${fmt(d.l)} × ${fmt(d.w)} × ${fmt(d.h)}`};
+}
+function fmt(v,d=1){ return (+v).toFixed(d).replace(/\.0$/,'') }
+function fmt1(v){ return (+v).toFixed(1) }
+
+/* =========================================================
+   Physics
+========================================================= */
+const P = {
+  parts:[], queue:0, spawnT:0,
+  wallN:26, dL:[], dR:[], vL:[], vR:[],
+  sag:0, running:false, settled:false, settleT:0,
+  fillLine:0
+};
+function resetWalls(){
+  P.dL = new Array(P.wallN).fill(0); P.dR = new Array(P.wallN).fill(0);
+  P.vL = new Array(P.wallN).fill(0); P.vR = new Array(P.wallN).fill(0);
+  P.sag = 0;
+}
+function resetSim(){
+  P.parts.length=0; P.queue=0; P.spawnT=0; P.running=false;
+  P.settled=false; P.settleT=0; P.fillLine=0;
+  resetWalls(); setStatus();
+}
+function startDrop(){
+  resetSim();
+  P.queue = fillCount(); P.running = true; setStatus();
+}
+function wallDeflAt(arr, y){ // y in [0, innerLen]
+  const t = Math.min(1, Math.max(0, y/innerLen())) * (P.wallN-1);
+  const i = Math.floor(t), f = t-i;
+  const a = arr[Math.min(i,P.wallN-1)], b = arr[Math.min(i+1,P.wallN-1)];
+  return a + (b-a)*f;
+}
+function pushWall(arr, varr, y, amt, vkick){
+  const c = Math.min(1, Math.max(0, y/innerLen())) * (P.wallN-1);
+  for(let i=0;i<P.wallN;i++){
+    const w = Math.exp(-((i-c)*(i-c))/4.5);
+    arr[i] = Math.min(28, arr[i] + amt*w);
+    varr[i]+= vkick*w;
+  }
+}
+function floorAt(x){
+  const u = usableHalfW();
+  const t = Math.max(-1, Math.min(1, x/u));
+  return -P.sag * Math.cos(t*Math.PI/2);
+}
+
+function step(dt){
+  const g = 9810;                       // mm/s²
+  const st = stiff01();
+  const IL = innerLen(), UH = usableHalfW();
+  const pd = prodDims(), rC = Math.max(3, pd.round ? pd.w/2 : pd.r);
+  const rest = 0.04 + 0.28*st;          // wall/floor restitution
+  const absorb = 0.75 - 0.55*st;        // share of penetration the film takes
+
+  // spawn
+  if(P.running && P.queue>0){
+    P.spawnT -= dt;
+    if(P.spawnT<=0){
+      P.spawnT = 0.10;
+      P.queue--;
+      const spread = Math.min(UH*0.45, S.bagW*0.22);
+      P.parts.push({
+        x:(Math.random()*2-1)*spread,
+        y:IL + S.endSeal + Math.max(0,S.dropH) + Math.random()*8,
+        vx:(Math.random()*2-1)*60, vy:0,
+        a:Math.random()*Math.PI, va:(Math.random()*2-1)*2
+      });
+    }
+  }
+
+  // integrate particles
+  for(const p of P.parts){
+    p.vy -= g*dt;
+    p.vx *= (1 - 0.12*dt); p.vy *= (1 - 0.02*dt);
+    p.x += p.vx*dt; p.y += p.vy*dt; p.a += p.va*dt;
+  }
+
+  // particle–particle (positional + impulse)
+  const n = P.parts.length;
+  for(let it=0; it<2; it++){
+    for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){
+      const a=P.parts[i], b=P.parts[j];
+      let dx=b.x-a.x, dy=b.y-a.y;
+      let d2=dx*dx+dy*dy, min=2*rC*0.94;
+      if(d2 < min*min && d2>1e-6){
+        const d=Math.sqrt(d2), pen=(min-d)/2;
+        dx/=d; dy/=d;
+        a.x-=dx*pen; a.y-=dy*pen; b.x+=dx*pen; b.y+=dy*pen;
+        const rvx=b.vx-a.vx, rvy=b.vy-a.vy, vn=rvx*dx+rvy*dy;
+        if(vn<0){
+          const imp=-(1+0.08)*vn/2;
+          a.vx-=imp*dx; a.vy-=imp*dy; b.vx+=imp*dx; b.vy+=imp*dy;
+          a.va += (Math.random()-.5)*0.6; b.va += (Math.random()-.5)*0.6;
+        }
+      }
+    }
+  }
+
+  // walls + floor
+  for(const p of P.parts){
+    if(p.y < IL + 2){ // inside the bag envelope
+      const yC = Math.max(0, Math.min(IL, p.y));
+      // left
+      let lim = UH + wallDeflAt(P.dL, yC);
+      if(p.x - rC < -lim){
+        const pen = -lim - (p.x - rC);
+        pushWall(P.dL, P.vL, yC, pen*absorb*0.55, Math.abs(p.vx)*absorb*0.02);
+        p.x += pen*(1-absorb*0.5);
+        if(p.vx<0) p.vx = -p.vx*rest;
+        p.vy *= 0.96; p.va *= 0.9;
+      }
+      // right
+      lim = UH + wallDeflAt(P.dR, yC);
+      if(p.x + rC > lim){
+        const pen = (p.x + rC) - lim;
+        pushWall(P.dR, P.vR, yC, pen*absorb*0.55, Math.abs(p.vx)*absorb*0.02);
+        p.x -= pen*(1-absorb*0.5);
+        if(p.vx>0) p.vx = -p.vx*rest;
+        p.vy *= 0.96; p.va *= 0.9;
+      }
+    } else {
+      // above bag: keep inside forming-tube channel
+      const ch = usableHalfW()*0.75;
+      if(p.x < -ch){ p.x=-ch; p.vx=Math.abs(p.vx)*0.3 }
+      if(p.x >  ch){ p.x= ch; p.vx=-Math.abs(p.vx)*0.3 }
+    }
+    // floor
+    const fy = floorAt(p.x) + rC;
+    if(p.y < fy){
+      p.y = fy;
+      if(p.vy < 0){
+        p.vy = -p.vy*rest;
+        if(Math.abs(p.vy)<80) p.vy=0;
+      }
+      p.vx *= (1 - 3.5*dt); p.va *= (1 - 3*dt);
+    }
+  }
+
+  // wall spring-back
+  const k = 30 + 320*st, c = 6 + 10*st;
+  for(let i=0;i<P.wallN;i++){
+    P.vL[i] += (-k*P.dL[i] - c*P.vL[i])*dt; P.dL[i] = Math.max(0, P.dL[i]+P.vL[i]*dt*10);
+    P.vR[i] += (-k*P.dR[i] - c*P.vR[i])*dt; P.dR[i] = Math.max(0, P.dR[i]+P.vR[i]*dt*10);
+  }
+
+  // floor sag toward load target
+  let resting=0;
+  for(const p of P.parts) if(p.y < IL && Math.abs(p.vy)<120) resting++;
+  const sagT = Math.min(innerLen()*0.10, (resting*S.pWt/50) * (2.2 - 1.8*st) * 1.6);
+  P.sag += (sagT - P.sag)*Math.min(1, 3*dt);
+
+  // fill line + settle detection
+  let top = 0, ke = 0;
+  for(const p of P.parts){
+    if(p.y < IL + 1) top = Math.max(top, p.y + rC*0.9);
+    ke += p.vx*p.vx + p.vy*p.vy;
+  }
+  P.fillLine += ((top||0) - P.fillLine)*Math.min(1, 5*dt);
+  const avg = n ? Math.sqrt(ke/n) : 0;
+  if(P.running && P.queue===0 && n>0 && avg < 25){
+    P.settleT += dt;
+    if(P.settleT > 0.6){ P.running=false; P.settled=true; setStatus() }
+  } else P.settleT = 0;
+}
+
+/* =========================================================
+   Canvas rendering
+========================================================= */
+const cv = $('sim'), ctx = cv.getContext('2d');
+let sc=1, ox=0, oy=0; // world→screen: sx = ox + x*sc ; sy = oy - y*sc
+
+function layout(){
+  const dpr = window.devicePixelRatio||1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  cv.width = w*dpr; cv.height = h*dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  const worldH = S.endSeal + innerLen() + S.endSeal + Math.max(0,S.dropH) + 60;
+  const worldW = S.bagW + 30;
+  sc = Math.min((w-210)/worldW, (h-100)/worldH);
+  sc = Math.max(0.15, sc);
+  ox = w/2 - 20;
+  oy = h - 52 - (S.endSeal+P.sag+6)*0; oy = h - 58;
+}
+const X = x => ox + x*sc, Y = y => oy - y*sc;
+
+function mono(px){ ctx.font = `500 ${px}px "DM Mono", ui-monospace, monospace` }
+
+function arrow(x1,y1,x2,y2){
+  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  const a=Math.atan2(y2-y1,x2-x1), L=6;
+  for(const s of [1,-1]){
+    ctx.beginPath(); ctx.moveTo(x2,y2);
+    ctx.lineTo(x2-L*Math.cos(a-0.4*s), y2-L*Math.sin(a-0.4*s)); ctx.stroke();
+  }
+}
+function dimV(x, yTop, yBot, label, color){
+  ctx.strokeStyle=color||'#59656C'; ctx.fillStyle=color||'#59656C'; ctx.lineWidth=1;
+  const mid=(yTop+yBot)/2;
+  arrow(x, mid-9, x, yTop); arrow(x, mid+9, x, yBot);
+  mono(11.5); ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.save(); ctx.translate(x, mid); ctx.rotate(-Math.PI/2);
+  const tw=ctx.measureText(label).width;
+  ctx.clearRect(-tw/2-4,-8,tw+8,16);
+  ctx.fillText(label,0,0); ctx.restore();
+}
+function dimH(y, xL, xR, label, color){
+  ctx.strokeStyle=color||'#59656C'; ctx.fillStyle=color||'#59656C'; ctx.lineWidth=1;
+  const mid=(xL+xR)/2;
+  arrow(mid-9, y, xL, y); arrow(mid+9, y, xR, y);
+  mono(11.5); ctx.textAlign='center'; ctx.textBaseline='middle';
+  const tw=ctx.measureText(label).width;
+  ctx.clearRect(mid-tw/2-4, y-8, tw+8, 16);
+  ctx.fillText(label, mid, y);
+}
+function ext(x1,y1,x2,y2){
+  ctx.strokeStyle='#8A959B'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+}
+
+function draw(){
+  layout();
+  const w=cv.clientWidth, h=cv.clientHeight;
+  ctx.clearRect(0,0,w,h);
+  if(S.view!=='fill') return;
+
+  const IL=innerLen(), UH=usableHalfW(), ES=S.endSeal;
+  const topY = IL + ES;              // top film edge during fill (open)
+  const pd = prodDims(), rC = Math.max(3, pd.round? pd.w/2 : pd.r);
+
+  /* ---- forming tube ---- */
+  const tubeHW = UH*0.78, outletY = IL + ES + Math.max(0,S.dropH);
+  ctx.strokeStyle='#B7C1C7'; ctx.lineWidth=1.6;
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(X(-tubeHW), 8); ctx.lineTo(X(-tubeHW), Y(outletY));
+  ctx.moveTo(X(tubeHW), 8);  ctx.lineTo(X(tubeHW), Y(outletY));
+  ctx.stroke();
+  // outlet flare
+  ctx.beginPath();
+  ctx.moveTo(X(-tubeHW), Y(outletY)); ctx.lineTo(X(-tubeHW-6), Y(outletY)+7);
+  ctx.moveTo(X(tubeHW), Y(outletY));  ctx.lineTo(X(tubeHW+6), Y(outletY)+7);
+  ctx.stroke();
+  mono(10); ctx.fillStyle='#8A959B'; ctx.textAlign='center';
+  ctx.fillText('FORMING TUBE', X(0), Math.max(16, Y(outletY)-10));
+
+  /* ---- bag interior fill ---- */
+  const wallX = (side, y) => side<0 ? -(UH + wallDeflAt(P.dL,y)) : (UH + wallDeflAt(P.dR,y));
+  ctx.beginPath();
+  ctx.moveTo(X(wallX(-1,0)), Y(floorAt(wallX(-1,0))));
+  for(let i=0;i<=P.wallN;i++){ const y=i/P.wallN*IL; ctx.lineTo(X(wallX(-1,y)), Y(y)) }
+  ctx.lineTo(X(-UH-7), Y(topY));
+  ctx.lineTo(X(UH+7), Y(topY));
+  for(let i=P.wallN;i>=0;i--){ const y=i/P.wallN*IL; ctx.lineTo(X(wallX(1,y)), Y(y)) }
+  // floor curve
+  for(let i=8;i>=-8;i--){ const x=i/8*UH; ctx.lineTo(X(x), Y(floorAt(x))) }
+  ctx.closePath();
+  ctx.fillStyle='rgba(255,255,255,.5)';
+  ctx.fill();
+
+  /* ---- particles ---- */
+  for(const p of P.parts){
+    ctx.save(); ctx.translate(X(p.x), Y(p.y)); ctx.rotate(-p.a*0.25);
+    const grd = ctx.createLinearGradient(0,-rC*sc,0,rC*sc);
+    grd.addColorStop(0,'#D6A87D'); grd.addColorStop(1,'#BC8759');
+    ctx.fillStyle=grd; ctx.strokeStyle='#A9754C'; ctx.lineWidth=1;
+    if(pd.round){
+      ctx.beginPath(); ctx.arc(0,0,(pd.w/2)*sc,0,Math.PI*2); ctx.fill(); ctx.stroke();
+    } else {
+      const hw=pd.w/2*sc, hh=pd.h/2*sc, r=Math.min(hw,hh)*0.35;
+      ctx.beginPath();
+      ctx.roundRect(-hw,-hh,hw*2,hh*2,r); ctx.fill(); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /* ---- film walls ---- */
+  ctx.strokeStyle='#59656C'; ctx.lineWidth=2; ctx.lineJoin='round';
+  for(const s of [-1,1]){
+    ctx.beginPath();
+    ctx.moveTo(X(s*UH), Y(floorAt(s*UH)));
+    for(let i=0;i<=P.wallN;i++){ const y=i/P.wallN*IL; ctx.lineTo(X(wallX(s,y)), Y(y)) }
+    ctx.lineTo(X(s*(UH+7)), Y(topY)); // open flare at top
+    ctx.stroke();
+  }
+  // floor
+  ctx.beginPath();
+  for(let i=-8;i<=8;i++){ const x=i/8*UH; const m=i===-8?'moveTo':'lineTo'; ctx[m](X(x), Y(floorAt(x))) }
+  ctx.stroke();
+
+  /* ---- bottom seal band ---- */
+  const bsTop = Y(floorAt(0)) , bsBot = bsTop + ES*sc;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(X(-UH)-4, bsTop, (UH*2)*sc+8, ES*sc); ctx.clip();
+  ctx.strokeStyle='#C4CCD1'; ctx.lineWidth=1;
+  for(let x=X(-UH)-20; x<X(UH)+20; x+=7){
+    ctx.beginPath(); ctx.moveTo(x, bsBot); ctx.lineTo(x+ES*sc, bsTop); ctx.stroke();
+  }
+  ctx.restore();
+  ctx.strokeStyle='#59656C'; ctx.lineWidth=2;
+  ctx.strokeRect(X(-UH), bsTop, (UH*2)*sc, ES*sc);
+
+  /* ---- top seal plane (jaw line, reserved) ---- */
+  ctx.strokeStyle='#8A959B'; ctx.lineWidth=1; ctx.setLineDash([6,4]);
+  ctx.beginPath(); ctx.moveTo(X(-UH-16), Y(IL)); ctx.lineTo(X(UH+16), Y(IL)); ctx.stroke();
+  ctx.setLineDash([]);
+  mono(10); ctx.fillStyle='#8A959B'; ctx.textAlign='left';
+  ctx.fillText('SEAL JAW', X(UH)+20, Y(IL)+3);
+
+  /* ---- fill line ---- */
+  if(P.fillLine > 1){
+    ctx.strokeStyle='#0F6E77'; ctx.lineWidth=1;
+    ctx.setLineDash([7,3,2,3]); ctx.globalAlpha=.75;
+    ctx.beginPath(); ctx.moveTo(X(-UH-16), Y(P.fillLine)); ctx.lineTo(X(UH+16), Y(P.fillLine)); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha=1;
+  }
+
+  /* ---- centerline ---- */
+  ctx.strokeStyle='#0F6E77'; ctx.globalAlpha=.4; ctx.lineWidth=1;
+  ctx.setLineDash([8,4,2,4]);
+  ctx.beginPath(); ctx.moveTo(X(0), Y(-ES)-6); ctx.lineTo(X(0), Y(topY)+ -0); ctx.stroke();
+  ctx.setLineDash([]); ctx.globalAlpha=1;
+
+  /* ---- dimensions ---- */
+  if(S.showDims){
+    const hs = Math.max(0, IL - P.fillLine);
+    // bag width (below)
+    ext(X(-S.bagW/2), Y(-ES)+10, X(-S.bagW/2), Y(-ES)+34);
+    ext(X(S.bagW/2),  Y(-ES)+10, X(S.bagW/2),  Y(-ES)+34);
+    dimH(Y(-ES)+28, X(-S.bagW/2), X(S.bagW/2), fmt1(S.bagW), '#59656C');
+    // bag length (right)
+    ext(X(UH)+6, Y(-ES), X(S.bagW/2)+58, Y(-ES));
+    ext(X(UH)+6, Y(topY), X(S.bagW/2)+58, Y(topY));
+    dimV(X(S.bagW/2)+52, Y(topY), Y(-ES), fmt1(S.bagL), '#59656C');
+    // fill height (left)
+    if(P.fillLine>1){
+      dimV(X(-S.bagW/2)-40, Y(P.fillLine), Y(0), 'FILL '+fmt1(P.fillLine), '#59656C');
+      // headspace (accent — the star metric)
+      dimV(X(-S.bagW/2)-40, Y(IL), Y(P.fillLine), 'HS '+fmt1(hs), '#0F6E77');
+    }
+    // drop height
+    if(S.dropH>4){
+      dimV(X(-tubeHW)-26, Y(outletY), Y(topY), 'DROP '+fmt1(S.dropH), '#8A959B');
+    }
+  }
+}
+
+/* =========================================================
+   Dieline (pillow, fin seal)
+========================================================= */
+function buildDieline(){
+  const W=S.bagW, L=S.bagL, F=S.finSeal, E=S.endSeal;
+  const web = 2*W + 2*F;
+  const svg = $('dielineSvg');
+  const sc2 = Math.min(640/web, 520/L, 2.2);
+  const px = v => v*sc2;
+  const M = 74;
+  const vbW = px(web)+M*2, vbH = px(L)+M*2;
+  svg.setAttribute('viewBox', `0 0 ${vbW} ${vbH}`);
+  const x0=M, y0=M;
+  // panel boundaries (fin | back½ | FRONT | back½ | fin)
+  const b = [0, F, F+W/2, F+W/2+W, F+W/2+W+W/2, web].map(px);
+
+  let s = `
+  <defs>
+    <pattern id="hatch" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+      <line x1="0" y1="0" x2="0" y2="7" stroke="#C4CCD1" stroke-width="1.1"/>
+    </pattern>
+    <marker id="dar" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M1,1 L8,4.5 L1,8" fill="none" stroke="#59656C" stroke-width="1.1"/>
+    </marker>
+    <marker id="darr" markerWidth="9" markerHeight="9" refX="2" refY="4.5" orient="auto">
+      <path d="M8,1 L1,4.5 L8,8" fill="none" stroke="#59656C" stroke-width="1.1"/>
+    </marker>
+  </defs>
+  <rect x="${x0}" y="${y0}" width="${px(web)}" height="${px(L)}" fill="#FBFCFD" stroke="none"/>
+  <!-- end seal bands -->
+  <rect x="${x0}" y="${y0}" width="${px(web)}" height="${px(E)}" fill="url(#hatch)" stroke="#C9D1D6" stroke-width="1"/>
+  <rect x="${x0}" y="${y0+px(L-E)}" width="${px(web)}" height="${px(E)}" fill="url(#hatch)" stroke="#C9D1D6" stroke-width="1"/>
+  <!-- fin strips -->
+  <rect x="${x0}" y="${y0}" width="${px(F)}" height="${px(L)}" fill="url(#hatch)" stroke="#C9D1D6" stroke-width="1"/>
+  <rect x="${x0+b[4]}" y="${y0}" width="${px(F)}" height="${px(L)}" fill="url(#hatch)" stroke="#C9D1D6" stroke-width="1"/>
+  <!-- cut line -->
+  <rect x="${x0}" y="${y0}" width="${px(web)}" height="${px(L)}" fill="none" stroke="#192227" stroke-width="1.6"/>`;
+
+  // fold lines
+  for(const i of [1,2,3,4]){
+    s += `<line x1="${x0+b[i]}" y1="${y0}" x2="${x0+b[i]}" y2="${y0+px(L)}"
+      stroke="#0F6E77" stroke-width="1" stroke-dasharray="8 4 2 4" opacity=".65"/>`;
+  }
+  // eye mark
+  const emW=px(Math.min(15,F+5)), emH=px(8);
+  s += `<rect x="${x0+px(web)-emW-px(2)}" y="${y0+px(L-E-12)}" width="${emW}" height="${emH}" fill="#192227"/>
+  <text class="dl-lab" x="${x0+px(web)-emW-px(2)-6}" y="${y0+px(L-E-12)+emH-2}" text-anchor="end">EYE MARK</text>`;
+
+  // panel labels
+  const midY = y0+px(L)/2;
+  const lab = (cx, t, big) => `<text class="dl-lab${big?' b':''}" x="${cx}" y="${midY+3.5}" text-anchor="middle">${t}</text>`;
+  s += lab(x0+(b[0]+b[1])/2,'FIN');
+  s += lab(x0+(b[1]+b[2])/2,'BACK ½');
+  s += lab(x0+(b[2]+b[3])/2,'FRONT PANEL',true);
+  s += lab(x0+(b[3]+b[4])/2,'BACK ½');
+  s += lab(x0+(b[4]+b[5])/2,'FIN');
+  s += `<text class="dl-lab" x="${x0+px(web)/2}" y="${y0+px(E)/2+3.5}" text-anchor="middle">TOP SEAL</text>
+        <text class="dl-lab" x="${x0+px(web)/2}" y="${y0+px(L)-px(E)/2+3.5}" text-anchor="middle">BOTTOM SEAL</text>`;
+
+  // dimensions
+  const dh = (y,xa,xb,t)=>`
+    <line x1="${xa}" y1="${y}" x2="${xb}" y2="${y}" stroke="#59656C" stroke-width="1" marker-start="url(#darr)" marker-end="url(#dar)"/>
+    <rect x="${(xa+xb)/2-26}" y="${y-9}" width="52" height="16" fill="#E9EDF0" opacity=".92"/>
+    <text class="dl-dim" x="${(xa+xb)/2}" y="${y+3.5}" text-anchor="middle">${t}</text>`;
+  const ex = (x1,y1,x2,y2)=>`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#8A959B" stroke-width="1"/>`;
+
+  // web width (bottom)
+  s += ex(x0, y0+px(L)+6, x0, y0+px(L)+40) + ex(x0+px(web), y0+px(L)+6, x0+px(web), y0+px(L)+40);
+  s += dh(y0+px(L)+32, x0, x0+px(web), 'WEB '+fmt1(web));
+  // front panel width (top)
+  s += ex(x0+b[2], y0-6, x0+b[2], y0-34) + ex(x0+b[3], y0-6, x0+b[3], y0-34);
+  s += dh(y0-26, x0+b[2], x0+b[3], fmt1(W));
+  // fin (top-left)
+  s += ex(x0, y0-6, x0, y0-34);
+  s += dh(y0-26, x0, x0+b[1], fmt1(F));
+  // cutoff (right)
+  s += ex(x0+px(web)+6, y0, x0+px(web)+42, y0) + ex(x0+px(web)+6, y0+px(L), x0+px(web)+42, y0+px(L));
+  s += `
+    <line x1="${x0+px(web)+34}" y1="${y0}" x2="${x0+px(web)+34}" y2="${y0+px(L)}" stroke="#59656C" stroke-width="1" marker-start="url(#darr)" marker-end="url(#dar)"/>
+    <g transform="rotate(-90 ${x0+px(web)+34} ${midY})">
+      <rect x="${x0+px(web)+34-32}" y="${midY-9}" width="64" height="16" fill="#E9EDF0" opacity=".92"/>
+      <text class="dl-dim" x="${x0+px(web)+34}" y="${midY+3.5}" text-anchor="middle">CUT ${fmt1(L)}</text>
+    </g>`;
+  // end seal (left)
+  s += ex(x0-6, y0, x0-30, y0) + ex(x0-6, y0+px(E), x0-30, y0+px(E));
+  s += `<line x1="${x0-24}" y1="${y0}" x2="${x0-24}" y2="${y0+px(E)}" stroke="#59656C" stroke-width="1"/>
+        <text class="dl-dim" x="${x0-30}" y="${y0+px(E)/2+3.5}" text-anchor="end">${fmt1(E)}</text>`;
+
+  svg.innerHTML = s;
+}
+
+/* =========================================================
+   STEP import — bounding box from CARTESIAN_POINTs
+========================================================= */
+$('btnUpload').addEventListener('click', ()=> $('fileStep').click());
+$('fileStep').addEventListener('change', e=>{
+  const f = e.target.files[0]; if(!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    const txt = String(rd.result);
+    const re = /CARTESIAN_POINT\s*\(\s*'[^']*'\s*,\s*\(\s*([-\d.Ee+]+)\s*,\s*([-\d.Ee+]+)\s*,\s*([-\d.Ee+]+)/g;
+    let m, n=0;
+    let min=[Infinity,Infinity,Infinity], max=[-Infinity,-Infinity,-Infinity];
+    while((m=re.exec(txt))){
+      for(let i=0;i<3;i++){
+        const v=+m[i+1];
+        if(v<min[i])min[i]=v; if(v>max[i])max[i]=v;
+      }
+      n++;
+    }
+    if(!n){
+      $('stepHint').textContent = 'No CARTESIAN_POINT entities found — check that this is an ASCII STEP file.';
+      $('stepHint').style.color = 'var(--danger)';
+      return;
+    }
+    const dims = [max[0]-min[0], max[1]-min[1], max[2]-min[2]].sort((a,b)=>b-a);
+    S.stepDims = {l:dims[0], w:dims[1], h:dims[2]};
+    S.stepName = f.name;
+    $('upName').textContent = f.name;
+    $('stepHint').style.color = '';
+    $('stepHint').textContent =
+      `BBOX ${fmt1(dims[0])} × ${fmt1(dims[1])} × ${fmt1(dims[2])} mm · ${n.toLocaleString()} pts`;
+    update();
+  };
+  rd.readAsText(f);
+});
+
+/* =========================================================
+   UI wiring
+========================================================= */
+function bindSeg(id, key, cb){
+  $(id).querySelectorAll('button[data-v]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      $(id).querySelectorAll('button').forEach(x=>x.classList.remove('on'));
+      b.classList.add('on'); S[key]=b.dataset.v; cb&&cb(); update();
+    });
+  });
+}
+bindSeg('segShape','shape', ()=>{
+  $('shapeRound').style.display = S.shape==='round'?'':'none';
+  $('shapeSquare').style.display = S.shape==='square'?'':'none';
+  $('shapeStep').style.display = S.shape==='step'?'':'none';
+});
+bindSeg('segMode','mode', ()=>{
+  $('fCount').style.display = S.mode==='count'?'':'none';
+  $('fWeight').style.display = S.mode==='weight'?'':'none';
+});
+
+const numFields = [
+  ['pDia','pDia'],['pThk','pThk'],['pL','pL'],['pW','pW'],['pH','pH'],
+  ['pWt','pWt'],['nCount','nCount'],['nWt','nWt'],['dropH','dropH'],
+  ['bagW','bagW'],['bagL','bagL'],['endSeal','endSeal'],['finSeal','finSeal']
+];
+for(const [id,key] of numFields){
+  $(id).addEventListener('input', ()=>{
+    const v = parseFloat($(id).value);
+    if(isFinite(v) && v>=0) S[key]=v;
+    update();
+  });
+}
+$('stiff').addEventListener('input', ()=>{
+  S.stiff = +$('stiff').value;
+  $('stiff').style.setProperty('--pct', S.stiff+'%');
+  update();
+});
+$('stiff').style.setProperty('--pct','40%');
+
+$('btnDrop').addEventListener('click', startDrop);
+$('btnReset').addEventListener('click', ()=>{ resetSim(); update() });
+$('btnDims').addEventListener('click', ()=>{
+  S.showDims=!S.showDims; $('btnDims').classList.toggle('on',S.showDims);
+});
+$('vwFill').addEventListener('click', ()=>setView('fill'));
+$('vwDieline').addEventListener('click', ()=>setView('dieline'));
+function setView(v){
+  S.view=v;
+  $('vwFill').classList.toggle('on',v==='fill');
+  $('vwDieline').classList.toggle('on',v==='dieline');
+  $('dielineWrap').classList.toggle('show', v==='dieline');
+  cv.style.display = v==='fill'?'block':'none';
+  $('scalechip').textContent = v==='fill' ? 'Front view · live sim · mm' : 'Pillow dieline · fin seal · flat · mm';
+  if(v==='dieline') buildDieline();
+}
+
+/* status + readouts */
+function setStatus(){
+  const chip=$('statusChip'), tx=$('statusTxt');
+  chip.classList.remove('filling','blocked');
+  const over = P.fillLine > innerLen();
+  if(over && P.parts.length){ chip.classList.add('blocked'); tx.textContent='Overfull' }
+  else if(P.running){ chip.classList.add('filling'); tx.textContent='Filling…' }
+  else if(P.settled){ tx.textContent='Settled' }
+  else tx.textContent='Ready';
+  $('msStatus').textContent = '● '+tx.textContent;
+  advisories();
+}
+function advisories(){
+  const el = $('advisories');
+  const hs = innerLen() - P.fillLine;
+  let out='';
+  if(P.parts.length && P.fillLine > innerLen()){
+    out += `<div class="advisory danger"><span class="ic">✕</span><span>Fill exceeds the seal jaw plane — lengthen the bag, widen it, or reduce the fill.</span></div>`;
+  } else if(P.settled && hs < 30){
+    out += `<div class="advisory"><span class="ic">!</span><span>Headspace ${fmt1(hs)} mm after settling — under 30 mm risks product in the seal jaws.</span></div>`;
+  }
+  if(fillCount()>=200){
+    out += `<div class="advisory"><span class="ic">!</span><span>Count capped at 200 pieces for the live simulation.</span></div>`;
+  }
+  el.innerHTML = out;
+}
+function update(){
+  const pd = prodDims(), n = fillCount(), wt = fillWeight();
+  const web = 2*S.bagW + 2*S.finSeal;
+  $('tbBag').innerHTML = `<b>${fmt1(S.bagW)} × ${fmt1(S.bagL)}</b> mm`;
+  $('tbWeb').textContent = `${fmt1(web)} × ${fmt1(S.bagL)} mm`;
+  $('tbProd').textContent = pd.label + (S.shape==='step'&&S.stepName?' · stp':'');
+  $('tbFill').textContent = `${n} pcs · ${fmt1(wt)} g`;
+  $('tbFilm').textContent = `Stiffness ${S.stiff} · ${stiffLabel()}`;
+  $('stiffVal').textContent = `${S.stiff} · ${stiffLabel()}`;
+  $('fillHint').textContent = S.mode==='weight'
+    ? `${n} pcs at ${fmt1(S.pWt)} g each → ${fmt1(n*S.pWt)} g dropped`
+    : `${fmt1(wt)} g total at ${fmt1(S.pWt)} g each`;
+  $('msBag').textContent = `${fmt1(S.bagW)} × ${fmt1(S.bagL)} mm`;
+  $('msFill').textContent = `${n} pcs · ${fmt1(wt)} g`;
+  if(S.view==='dieline') buildDieline();
+  advisories();
+}
+function liveReadouts(){
+  const hs = innerLen() - P.fillLine;
+  const has = P.parts.length && P.fillLine>1;
+  $('tbFH').textContent = has ? fmt1(P.fillLine)+' mm' : '—';
+  const hsEl = $('tbHS');
+  if(!has){ hsEl.textContent='—' }
+  else if(hs<0){ hsEl.innerHTML = `<span class="dv">${fmt1(hs)} mm</span>` }
+  else if(P.settled && hs<30){ hsEl.innerHTML = `<span class="wv">${fmt1(hs)} mm</span>` }
+  else { hsEl.innerHTML = `<b>${fmt1(hs)} mm</b>` }
+  $('msFH').textContent = has ? fmt1(P.fillLine)+' mm' : '—';
+  $('msHS').textContent = has ? fmt1(hs)+' mm' : '—';
+}
+
+/* exports */
+function dielineSvgString(){
+  buildDieline();
+  const svg = $('dielineSvg');
+  const css = `.dl-dim{font-family:"DM Mono",ui-monospace,monospace;font-size:11px;fill:#59656C;font-weight:500}
+  .dl-lab{font-family:"DM Mono",ui-monospace,monospace;font-size:10px;fill:#8A959B;letter-spacing:.12em}
+  .dl-lab.b{fill:#59656C}`;
+  const vb = svg.getAttribute('viewBox');
+  return {vb, str:`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}"><style>${css}</style>${svg.innerHTML}</svg>`};
+}
+function dlName(ext){ return `pillow_dieline_${fmt1(S.bagW)}x${fmt1(S.bagL)}.${ext}` }
+$('btnExportDL').addEventListener('click', ()=>{
+  const {str} = dielineSvgString();
+  dl(new Blob([str],{type:'image/svg+xml'}), dlName('svg'));
+});
+$('btnExportPNG').addEventListener('click', ()=>{
+  const {vb, str} = dielineSvgString();
+  const [,,vw,vh] = vb.split(' ').map(Number);
+  const scale = 3; // ~3× raster for crisp print/deck use
+  const img = new Image();
+  const url = URL.createObjectURL(new Blob([str],{type:'image/svg+xml'}));
+  img.onload = ()=>{
+    const c = document.createElement('canvas');
+    c.width = Math.round(vw*scale); c.height = Math.round(vh*scale);
+    const g = c.getContext('2d');
+    g.fillStyle = '#FFFFFF'; g.fillRect(0,0,c.width,c.height);
+    g.drawImage(img, 0, 0, c.width, c.height);
+    URL.revokeObjectURL(url);
+    c.toBlob(b => b && dl(b, dlName('png')), 'image/png');
+  };
+  img.onerror = ()=> URL.revokeObjectURL(url);
+  img.src = url;
+});
+$('btnExportSpec').addEventListener('click', ()=>{
+  const pd=prodDims(), hs=innerLen()-P.fillLine;
+  const lines = [
+    'VFFS FILL SIMULATOR — SPEC SHEET','VF-101 · REV A · '+new Date().toISOString().slice(0,10),'',
+    'BAG (PILLOW, FIN SEAL)',
+    `  Bag width × length : ${fmt1(S.bagW)} × ${fmt1(S.bagL)} mm`,
+    `  Web width          : ${fmt1(2*S.bagW+2*S.finSeal)} mm`,
+    `  Cutoff length      : ${fmt1(S.bagL)} mm`,
+    `  End seal / fin seal: ${fmt1(S.endSeal)} / ${fmt1(S.finSeal)} mm`,
+    `  Film stiffness     : ${S.stiff} (${stiffLabel()})`,'',
+    'PRODUCT',
+    `  Geometry           : ${S.shape.toUpperCase()} ${pd.label}`+(S.stepName?` (${S.stepName})`:''),
+    `  Unit weight        : ${fmt1(S.pWt)} g`,'',
+    'FILL',
+    `  Target             : ${S.mode==='count' ? fillCount()+' pcs' : fmt1(S.nWt)+' g'}`,
+    `  Dropped            : ${fillCount()} pcs · ${fmt1(fillWeight())} g`,
+    `  Drop height        : ${fmt1(S.dropH)} mm`,'',
+    'RESULT'+(P.settled?'':' (not yet settled)'),
+    `  Fill height        : ${P.fillLine>1?fmt1(P.fillLine)+' mm':'—'}`,
+    `  Headspace          : ${P.fillLine>1?fmt1(hs)+' mm':'—'}`
+  ];
+  dl(new Blob([lines.join('\n')],{type:'text/plain'}), 'vffs_spec_sheet.txt');
+});
+function dl(blob, name){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download=name;
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove()},400);
+}
+
+/* =========================================================
+   Main loop
+========================================================= */
+let last=performance.now(), acc=0;
+function frame(now){
+  let dt=(now-last)/1000; last=now;
+  dt=Math.min(dt,0.05); acc+=dt;
+  const h=1/240;
+  let guard=0;
+  while(acc>h && guard<40){ step(h); acc-=h; guard++ }
+  draw();
+  liveReadouts();
+  if(P.running || P.parts.some(p=>Math.abs(p.vy)>1)) setStatus();
+  requestAnimationFrame(frame);
+}
+new ResizeObserver(()=>draw()).observe(cv);
+resetSim(); update(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>
