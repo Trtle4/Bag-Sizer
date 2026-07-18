@@ -23,7 +23,7 @@ export interface DimState {
   innerLen: number;
   fillLine: number;
   headspace: number;
-  spawnY: number;
+  tubeLen: number;
   hasFill: boolean;
 }
 
@@ -48,7 +48,7 @@ export class DimOverlay {
         ? new THREE.Vector3(across0, y, 0)
         : new THREE.Vector3(0, y, across0);
     const topFilm = s.innerLen + s.endSeal;
-    const outletY = topFilm + Math.max(0, s.dropH);
+    const tubeTop = s.innerLen + s.tubeLen;
 
     const parts: string[] = [];
     const proj = (v: THREE.Vector3) => {
@@ -85,9 +85,9 @@ export class DimOverlay {
         ),
       );
     }
-    // Drop height near the tube.
+    // Drop height labels the former tube (spawn launches at the outlet velocity).
     if (s.dropH > 4) {
-      parts.push(this.dim(proj(P(0, topFilm)), proj(P(0, outletY)), { x: -70, y: 0 }, "DROP " + fmt1(s.dropH), INK3));
+      parts.push(this.dim(proj(P(0, s.innerLen)), proj(P(0, tubeTop)), { x: -70, y: 0 }, "DROP " + fmt1(s.dropH), INK3));
     }
     this.svg.innerHTML = parts.join("");
   }

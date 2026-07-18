@@ -435,7 +435,7 @@ function drawDims(s: AppState): void {
       innerLen: env.innerLen,
       fillLine: lastMeasure.fillLine,
       headspace: lastMeasure.headspace,
-      spawnY: env.spawnY,
+      tubeLen: env.tubeLen,
       hasFill: sim.particleCount > 0 && lastMeasure.fillLine > 1,
     },
     renderer.camera,

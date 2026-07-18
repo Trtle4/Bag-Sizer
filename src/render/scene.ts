@@ -3,8 +3,9 @@
  *
  * Scene units are millimetres (matching the sim's app space). Product is drawn
  * with an InstancedMesh (one draw call for up to 200 pieces); the film shell is
- * a translucent box with a sagging floor and a wireframe forming tube. The
- * transparent WebGL canvas sits over the design-system drafting backdrop.
+ * a lofted pillow body (pinched sealed bottom, rounded belly, open mouth) with a
+ * round forming tube + hopper funnel above. The transparent WebGL canvas sits
+ * over the design-system drafting backdrop.
  *
  * Cameras: a ¾ perspective (orbitable) default plus orthographic front/side
  * presets so the dimension overlay reads like an engineering drawing.
@@ -12,7 +13,7 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { FillSim, ProductSpec, ShellState } from "../physics/world.js";
+import type { FillSim, ProductSpec } from "../physics/world.js";
 import { simplifyHull } from "../geometry/hull.js";
 
 export type CameraMode = "iso" | "front" | "side";
@@ -37,10 +38,13 @@ export class SceneRenderer {
   private dummy = new THREE.Object3D();
 
   private shellGroup = new THREE.Group();
-  private filmMesh: THREE.Mesh;
-  private filmEdges: THREE.LineSegments;
-  private floorMesh: THREE.Mesh;
-  private tube: THREE.LineSegments;
+  private pillow: THREE.Mesh; // lofted pillow film body (rebuilt per bag)
+  private pillowEdges: THREE.LineSegments;
+  private seal: THREE.Mesh; // pinched, hatched bottom end seal
+  private tube: THREE.Mesh;
+  private tubeEdges: THREE.LineSegments;
+  private funnel: THREE.Mesh;
+  private funnelEdges: THREE.LineSegments;
   private grid: THREE.GridHelper;
 
   private target = new THREE.Vector3(0, 100, 0);
@@ -86,31 +90,69 @@ export class SceneRenderer {
     this.product.count = 0;
     this.scene.add(this.product);
 
-    // Film shell.
-    this.filmMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(1, 1, 1),
+    // Pillow film body — a lofted pillow profile (pinched sealed bottom, rounded
+    // belly, open mouth), geometry rebuilt per bag in setShell().
+    this.pillow = new THREE.Mesh(
+      new THREE.BufferGeometry(),
       new THREE.MeshStandardMaterial({
         color: COL_FILM,
         transparent: true,
-        opacity: 0.1,
+        opacity: 0.2,
         side: THREE.DoubleSide,
         depthWrite: false,
         roughness: 1,
       }),
     );
-    this.filmEdges = new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
-      new THREE.LineBasicMaterial({ color: COL_INK2, transparent: true, opacity: 0.5 }),
+    this.pillowEdges = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: COL_INK2, transparent: true, opacity: 0.55 }),
     );
-    this.floorMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(1, 1, 16, 3),
-      new THREE.MeshStandardMaterial({ color: COL_FILM, transparent: true, opacity: 0.28, side: THREE.DoubleSide, roughness: 1 }),
+    // Bottom end seal — a flat, pinched, hatched strip at the base.
+    this.seal = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({ color: COL_INK2, transparent: true, opacity: 0.28, side: THREE.DoubleSide }),
     );
-    this.tube = new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
-      new THREE.LineBasicMaterial({ color: 0xb7c1c7, transparent: true, opacity: 0.7 }),
+    // Round forming tube — open-ended translucent cylinder, scaled per build.
+    this.tube = new THREE.Mesh(
+      new THREE.CylinderGeometry(1, 1, 1, 40, 1, true),
+      new THREE.MeshStandardMaterial({
+        color: 0xb7c1c7,
+        transparent: true,
+        opacity: 0.22,
+        side: THREE.DoubleSide,
+        roughness: 0.9,
+        metalness: 0,
+      }),
     );
-    this.shellGroup.add(this.filmMesh, this.filmEdges, this.floorMesh, this.tube);
+    this.tubeEdges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.CylinderGeometry(1, 1, 1, 40, 1, true)),
+      new THREE.LineBasicMaterial({ color: 0x9aa6ad, transparent: true, opacity: 0.5 }),
+    );
+    // Hopper funnel — geometry rebuilt per bag in setFormer().
+    this.funnel = new THREE.Mesh(
+      new THREE.CylinderGeometry(2, 1, 1, 40, 1, true),
+      new THREE.MeshStandardMaterial({
+        color: 0xb7c1c7,
+        transparent: true,
+        opacity: 0.18,
+        side: THREE.DoubleSide,
+        roughness: 0.9,
+        metalness: 0,
+      }),
+    );
+    this.funnelEdges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.CylinderGeometry(2, 1, 1, 40, 1, true)),
+      new THREE.LineBasicMaterial({ color: 0x9aa6ad, transparent: true, opacity: 0.45 }),
+    );
+    this.shellGroup.add(
+      this.pillow,
+      this.pillowEdges,
+      this.seal,
+      this.tube,
+      this.tubeEdges,
+      this.funnel,
+      this.funnelEdges,
+    );
     this.scene.add(this.shellGroup);
 
     this.resize();
@@ -124,11 +166,26 @@ export class SceneRenderer {
   }
 
   /** Frame the camera for a new bag envelope. */
-  frame(env: { innerLen: number; usableHalfW: number; usableHalfD: number; spawnY: number }): void {
-    const cy = env.innerLen * 0.42;
+  frame(env: {
+    innerLen: number;
+    usableHalfW: number;
+    usableHalfD: number;
+    endSeal: number;
+    jawY: number;
+    tubeR: number;
+    tubeLen: number;
+    funnelR: number;
+    funnelH: number;
+  }): void {
+    this.setFormer(env);
+    this.setShell(env, env.endSeal);
+    // Aim at the bag body (not the tall former) and keep the camera fairly level
+    // so we look INTO the bag — a steep top-down angle makes product resting at
+    // the back-bottom read as if it were below the transparent front film.
+    const cy = env.innerLen * 0.45;
     this.target.set(0, cy, 0);
-    const reach = Math.max(env.usableHalfW * 2, env.innerLen) * 1.5 + 120;
-    this.persp.position.set(reach * 0.62, cy + env.innerLen * 0.55, reach * 0.82);
+    const reach = Math.max(env.usableHalfW * 2, env.funnelR * 2, env.innerLen) * 1.5 + 160;
+    this.persp.position.set(reach * 0.7, cy + env.innerLen * 0.28, reach * 0.72);
     this.controls.target.copy(this.target);
     this.grid.position.y = 0;
     this.grid.scale.setScalar(Math.max(1, (env.usableHalfW * 2 + 200) / 600));
@@ -183,9 +240,6 @@ export class SceneRenderer {
 
   /** Update all dynamic geometry from the sim and render one frame. */
   draw(sim: FillSim): void {
-    const shell = sim.shell();
-    this.updateShell(shell);
-
     const transforms = sim.particleTransforms();
     const n = Math.min(transforms.length, MAX_INSTANCES);
     for (let i = 0; i < n; i++) {
@@ -202,31 +256,45 @@ export class SceneRenderer {
     this.renderer.render(this.scene, this.camera);
   }
 
-  private updateShell(s: ShellState): void {
-    // Film box + edges (walls), centred over the fill zone.
-    this.filmMesh.scale.set(2 * s.halfW, s.innerLen, 2 * s.halfD);
-    this.filmMesh.position.set(0, s.innerLen / 2, 0);
-    this.filmEdges.scale.copy(this.filmMesh.scale);
-    this.filmEdges.position.copy(this.filmMesh.position);
+  /**
+   * Rebuild the pillow film body for a new bag: a lofted profile that pinches
+   * flat at the sealed bottom, rounds out through the belly where product sits,
+   * and opens at the top mouth (the concept's tapered-wall cross-section in 3-D).
+   * Plus the flat, hatched bottom end-seal strip.
+   */
+  private setShell(env: { innerLen: number; usableHalfW: number; usableHalfD: number }, endSeal: number): void {
+    const { geometry, edges } = buildPillowGeometry(env.usableHalfW, env.usableHalfD, env.innerLen, endSeal);
+    this.pillow.geometry.dispose();
+    this.pillow.geometry = geometry;
+    (this.pillowEdges.geometry as THREE.BufferGeometry).dispose();
+    this.pillowEdges.geometry = edges;
 
-    // Sagging floor plane.
-    const geo = this.floorMesh.geometry as THREE.PlaneGeometry;
-    const pos = geo.attributes.position as THREE.BufferAttribute;
-    for (let i = 0; i < pos.count; i++) {
-      const u = pos.getX(i); // -0.5..0.5
-      const v = pos.getY(i);
-      const x = u * 2 * s.halfW;
-      const z = v * 2 * s.halfD;
-      const t = Math.max(-1, Math.min(1, x / Math.max(1, s.halfW)));
-      pos.setXYZ(i, x, -s.sag * Math.cos((t * Math.PI) / 2), z);
-    }
-    pos.needsUpdate = true;
-    geo.computeVertexNormals();
+    // Bottom end seal: a small flat pinched strip at the sealed base.
+    this.seal.geometry.dispose();
+    this.seal.geometry = new THREE.PlaneGeometry(env.usableHalfW * 0.6, Math.max(4, endSeal));
+    this.seal.position.set(0, -endSeal / 2, 0);
+  }
 
-    // Forming tube wireframe.
-    const tubeH = s.spawnY + 20 - s.jawY;
-    this.tube.scale.set(2 * s.tubeHalfW, tubeH, 2 * s.tubeHalfD);
-    this.tube.position.set(0, s.jawY + tubeH / 2, 0);
+  /** Rebuild the former (tube + hopper funnel) geometry for a new bag. */
+  private setFormer(cfg: {
+    jawY: number;
+    tubeR: number;
+    tubeLen: number;
+    funnelR: number;
+    funnelH: number;
+  }): void {
+    this.tube.scale.set(cfg.tubeR, cfg.tubeLen, cfg.tubeR);
+    this.tube.position.set(0, cfg.jawY + cfg.tubeLen / 2, 0);
+    this.tubeEdges.scale.copy(this.tube.scale);
+    this.tubeEdges.position.copy(this.tube.position);
+
+    const fy = cfg.jawY + cfg.tubeLen + cfg.funnelH / 2;
+    this.funnel.geometry.dispose();
+    this.funnel.geometry = new THREE.CylinderGeometry(cfg.funnelR, cfg.tubeR, cfg.funnelH, 40, 1, true);
+    this.funnel.position.set(0, fy, 0);
+    (this.funnelEdges.geometry as THREE.BufferGeometry).dispose();
+    this.funnelEdges.geometry = new THREE.EdgesGeometry(this.funnel.geometry);
+    this.funnelEdges.position.set(0, fy, 0);
   }
 
   dispose(): void {
@@ -253,4 +321,90 @@ function buildProductGeometry(spec: ProductSpec): THREE.BufferGeometry {
     return geo;
   }
   return new THREE.BoxGeometry(spec.w, spec.h, spec.depth);
+}
+
+/**
+ * Loft a pillow film body: an oval cross-section whose width/depth follow the
+ * pillow profile — pinched flat at the sealed bottom, rounded through the belly,
+ * thinning toward the open top mouth. Returns the surface + an edge wireframe.
+ */
+function buildPillowGeometry(
+  halfW: number,
+  halfD: number,
+  innerLen: number,
+  endSeal: number,
+): { geometry: THREE.BufferGeometry; edges: THREE.BufferGeometry } {
+  const LEVELS = 30;
+  const SEG = 32;
+  const smooth = (x: number) => {
+    const t = Math.max(0, Math.min(1, x));
+    return t * t * (3 - 2 * t);
+  };
+  // The pinch is BELOW the fill zone (the sealed strip, y in [-endSeal, 0]); the
+  // belly stays FULL width where product actually rests (y >= 0) so nothing pokes
+  // out. Depth bulges through the belly and thins toward the open mouth.
+  const y0 = -endSeal;
+  const y1 = innerLen;
+  // Shell always sits a margin OUTSIDE the collision volume (±usableHalfW/D) so
+  // product is unambiguously contained; the pinch is confined to the seal strip.
+  const WMARGIN = 1.1;
+  const scaleAt = (y: number): { w: number; d: number } => {
+    if (y <= 0) {
+      const f = smooth((y - y0) / Math.max(1, endSeal)); // 0 at seal → 1 at floor
+      return { w: 0.12 + (WMARGIN - 0.12) * f, d: 0.08 + (WMARGIN - 0.08) * f };
+    }
+    const h = y / innerLen; // 0 at floor → 1 at mouth
+    const belly = Math.sin(Math.PI * Math.min(1, h / 0.92)); // 0 at ends, 1 mid
+    const taper = 1 - 0.25 * smooth((h - 0.8) / 0.2); // thin toward the mouth
+    // Modest belly so the shell hugs the fill volume (reads clearly as "inside").
+    return { w: WMARGIN, d: (WMARGIN + 0.14 * belly) * taper };
+  };
+
+  const rings: THREE.Vector3[][] = [];
+  for (let i = 0; i <= LEVELS; i++) {
+    const y = y0 + (i / LEVELS) * (y1 - y0);
+    const s = scaleAt(y);
+    const hw = halfW * s.w;
+    const hd = halfD * s.d;
+    const ring: THREE.Vector3[] = [];
+    for (let j = 0; j < SEG; j++) {
+      const a = (j / SEG) * Math.PI * 2;
+      ring.push(new THREE.Vector3(hw * Math.cos(a), y, hd * Math.sin(a)));
+    }
+    rings.push(ring);
+  }
+
+  const verts: number[] = [];
+  for (const ring of rings) for (const p of ring) verts.push(p.x, p.y, p.z);
+  const vid = (i: number, j: number) => i * SEG + (j % SEG);
+  const idx: number[] = [];
+  for (let i = 0; i < LEVELS; i++) {
+    for (let j = 0; j < SEG; j++) {
+      idx.push(vid(i, j), vid(i + 1, j), vid(i, j + 1));
+      idx.push(vid(i, j + 1), vid(i + 1, j), vid(i + 1, j + 1));
+    }
+  }
+  // Pinched bottom cap (fan to the seal line) → looks sealed/closed.
+  const centre = verts.length / 3;
+  verts.push(0, y0, 0);
+  for (let j = 0; j < SEG; j++) idx.push(vid(0, j + 1), centre, vid(0, j));
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+  geometry.setIndex(idx);
+  geometry.computeVertexNormals();
+
+  // Edge wireframe: a few horizontal rings + vertical seams.
+  const ep: number[] = [];
+  const seg = (p: THREE.Vector3, q: THREE.Vector3) => ep.push(p.x, p.y, p.z, q.x, q.y, q.z);
+  for (const lvl of [0, Math.round(LEVELS * 0.4), Math.round(LEVELS * 0.7), LEVELS]) {
+    for (let j = 0; j < SEG; j++) seg(rings[lvl][j], rings[lvl][(j + 1) % SEG]);
+  }
+  for (const j of [0, SEG / 4, SEG / 2, (3 * SEG) / 4]) {
+    for (let i = 0; i < LEVELS; i++) seg(rings[i][j], rings[i + 1][j]);
+  }
+  const edges = new THREE.BufferGeometry();
+  edges.setAttribute("position", new THREE.Float32BufferAttribute(ep, 3));
+
+  return { geometry, edges };
 }
