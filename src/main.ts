@@ -48,6 +48,11 @@ let lastMeasure: Measurements = {
   fillVolume: 0,
   bulkDensity: 0,
   pctUsable: 0,
+  formedDepth: 0,
+  formedWidth: 0,
+  formedRoundness: 0,
+  formedVolume: 0,
+  reconcile: 0,
 };
 
 // ---------- param mapping ----------
@@ -414,6 +419,12 @@ function liveReadouts(m: Measurements): void {
   $("tbVol").textContent = vol;
   $("msVol").textContent = has ? `${fmt1(m.fillVolume / 1000)} cm³` : "—";
   $("msPct").textContent = has ? `${fmt1(m.pctUsable)} %` : "—";
+
+  // Formed front-to-back depth (perimeter conservation) — bulges with fill, and
+  // limp film (low stiffness) rounds deeper than stiff film for the same load.
+  $("tbDepth").textContent = has
+    ? `${fmt1(m.formedDepth)} mm · ${Math.round(m.formedRoundness * 100)}% round`
+    : `${fmt1(m.formedDepth)} mm`;
 }
 
 function drawDims(s: AppState): void {
@@ -424,19 +435,21 @@ function drawDims(s: AppState): void {
   }
   const container = $("sim3d");
   const env = sim.envelope;
+  const hasFill = sim.particleCount > 0 && lastMeasure.fillLine > 1;
   dims.draw(
     {
       mode: s.camera,
       bagW: s.bagW,
       bagL: s.bagL,
-      bagD: 2 * env.usableHalfD,
+      // Side-view depth callout reflects the live formed bulge once filled.
+      bagD: hasFill ? lastMeasure.formedDepth : 2 * env.usableHalfD,
       endSeal: s.endSeal,
       dropH: s.dropH,
       innerLen: env.innerLen,
       fillLine: lastMeasure.fillLine,
       headspace: lastMeasure.headspace,
       tubeLen: env.tubeLen,
-      hasFill: sim.particleCount > 0 && lastMeasure.fillLine > 1,
+      hasFill,
     },
     renderer.camera,
     container.clientWidth,

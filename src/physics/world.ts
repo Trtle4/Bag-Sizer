@@ -12,10 +12,11 @@
  * -----
  * - Product: 3-D rigid bodies with primitive colliders — cylinder (round),
  *   cuboid (square), convex hull ≤16 verts (STEP silhouette, extruded).
- * - Film: a quasi-static parametric shell. Four kinematic wall colliders plus a
- *   kinematic sagging floor, whose billow/sag are driven analytically from the
- *   film stiffness and the resting load — not simulated cloth. Stiffness also
- *   maps to contact restitution/damping so the catch feel survives.
+ * - Film: a quasi-static parametric shell. A static elliptical wall cage lying on
+ *   the formed cross-section (perimeter conservation) plus a kinematic sagging
+ *   floor — not simulated cloth. The cage is the exact collider twin of the
+ *   rendered film, so the wall matches the visible profile with no gaps. Stiffness
+ *   sets the formed depth and maps to contact restitution/damping.
  * - A static forming tube guides product in; static outer walls + a catch floor
  *   contain overflow.
  * - Fixed timestep with substep clamping; seeded RNG spawn jitter → deterministic.
@@ -25,14 +26,18 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import { Rng } from "./rng.js";
 import { simplifyHull } from "../geometry/hull.js";
 import { headspace as headspaceOf } from "../geometry/index.js";
+import { formedSection, roundnessFromFill, formedArea } from "../geometry/formed.js";
 import type { BagParams, BagStyle } from "../bagstyles/types.js";
 
 const MM = 0.001; // mm → m
 const M = 1000; // m → mm
 export const FIXED_DT = 1 / 120; // fixed physics substep (s)
-const REST_SPEED = 0.06; // m/s below which a piece is "at rest"
-const SETTLE_AVG = 0.04; // m/s mean speed for settle detection
+const REST_SPEED = 0.07; // m/s below which a piece is "at rest"
+const SETTLE_AVG = 0.06; // m/s mean speed for settle detection (tolerant of slow prism creep)
 const HULL_VERTS = 8; // silhouette verts before extrusion → ≤16 in 3-D
+const PACKING = 0.6; // bulk packing fraction of a settled pile (void-corrected)
+const SOLVER_ITERS = 12; // ↑ from Rapier's default 4 so thin discs stack, not interpenetrate
+const LENGTH_UNIT = 0.045; // Rapier length scale → contact tolerances match cm-scale product
 
 let rapierReady: Promise<void> | null = null;
 /** Initialise the Rapier WASM runtime once. Must resolve before `new FillSim()`. */
@@ -94,6 +99,30 @@ export interface Measurements {
   fillVolume: number;
   bulkDensity: number;
   pctUsable: number;
+  /** Live formed front-to-back depth (mm) from perimeter conservation. */
+  formedDepth: number;
+  /** Live formed width (mm) — rounding pulls the sides in. */
+  formedWidth: number;
+  /** Live roundness 0 (lay-flat) … 1 (fully round). */
+  formedRoundness: number;
+  /** Bag internal volume (cm³) from the formed cross-section over the fill height. */
+  formedVolume: number;
+  /** Reconciliation: formed internal volume ÷ (product volume + voids). ~1 = consistent. */
+  reconcile: number;
+}
+
+/** Live formed shell profile for the renderer (belly cross-section + fill line). */
+export interface LiveShell {
+  innerLen: number;
+  endSeal: number;
+  jawY: number;
+  flatHalfW: number;
+  bellyHalfW: number;
+  bellyHalfD: number;
+  fillLine: number;
+  roundness: number;
+  tubeR: number;
+  tubeLen: number;
 }
 
 interface Kinematic {
@@ -107,8 +136,6 @@ export class FillSim {
   private params!: FillParams;
 
   private product: RAPIER.RigidBody[] = [];
-  private walls: { left: Kinematic; right: Kinematic; front: Kinematic; back: Kinematic } | null =
-    null;
   private floorTiles: Kinematic[] = [];
 
   private queue = 0;
@@ -132,15 +159,20 @@ export class FillSim {
   private spawnRadius = 0; // radius of the spawn disc above the funnel mouth (mm)
   private dropSpeed = 1; // downward launch speed from drop height (m/s)
   private wallBot = 0; // wall foot (mm, below the floor sag)
-  private wallHalfY = 0; // wall vertical half-extent (mm)
   private productRadius = 6;
 
-  private sag = 0;
-  private billow = 0;
-  private sagGain = 1;
-  private billowGain = 0.3;
+  // Formed cross-section (perimeter conservation) — the film is cut flat, so its
+  // cross-section circumference is fixed; as product fills, that perimeter
+  // redistributes flat → round, giving a bounded formed depth.
+  private flatHalfW = 0; // conserved lay-flat half-width (mm), C = 4·flatHalfW
+  private pieceVolume = 0; // solid volume of one product piece (mm³)
+  private formedRoundnessTgt = 0; // roundness at the full target fill (0 flat … 1 round)
 
-  private static readonly WALL_T = 3; // wall half-thickness (mm)
+  private sag = 0;
+  private sagGain = 1;
+
+  private static readonly WALL_T = 4; // radial wall half-thickness (mm)
+  private static readonly N_WALL = 30; // ellipse cage segments — no gaps for thin discs
   private static readonly N_FLOOR = 6;
   private static readonly FLOOR_HALF_T = 30; // thick floor so thin fast product can't tunnel it
 
@@ -150,16 +182,43 @@ export class FillSim {
     if (this.world) this.world.free();
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.world.timestep = FIXED_DT;
+    // Our world runs in metres but the product is centimetre-scale (a 4 mm disc
+    // is 0.004 m). Rapier's contact tolerances are `normalized × lengthUnit`, so
+    // with the default lengthUnit = 1 m the ~1 mm penetration slop is enough to
+    // swallow a thin disc and the whole stack collapses. Scaling lengthUnit to the
+    // product scale shrinks the slop proportionally so discs stack instead of
+    // interpenetrating. Extra solver iterations firm up the pile.
+    this.world.integrationParameters.lengthUnit = LENGTH_UNIT;
+    this.world.numSolverIterations = SOLVER_ITERS;
+    this.world.integrationParameters.numInternalPgsIterations = 4;
 
     const st = clamp01(params.stiff / 100);
     const prof = params.style.simProfile(params.bag, { stiffNorm: st });
     this.innerLen = prof.innerLen;
-    this.usableHalfW = prof.usableHalfW;
-    // Floor depth so the product always physically fits (never squeezes out).
+
+    // Formed cross-section by perimeter conservation. The lay-flat film width is
+    // fixed (usableHalfW is half of it); the settled product volume drives how
+    // much of that fixed perimeter rounds out into depth. Empty → lay-flat,
+    // packed toward the fully-round capacity → round. Limp film bulges more.
+    this.flatHalfW = prof.usableHalfW;
+    this.pieceVolume = pieceVolumeOf(params.product);
+    const targetVolume = Math.max(0, params.count) * this.pieceVolume;
+    this.formedRoundnessTgt = roundnessFromFill({
+      productVolume: targetVolume,
+      flatHalfW: this.flatHalfW,
+      innerLen: this.innerLen,
+      stiffNorm: st,
+      packing: PACKING,
+    });
+    const sec = formedSection(this.flatHalfW, this.formedRoundnessTgt);
+
+    // Collision envelope = the formed section at the full target fill (the widest
+    // the bag will bulge). Rounding trades width for depth, so both are floored at
+    // the product footprint so a piece always physically fits.
     const prMin = 0.5 * Math.max(params.product.w, params.product.depth);
-    this.usableHalfD = Math.max(prof.usableHalfD, prMin + 7);
+    this.usableHalfW = Math.max(sec.halfW, prMin + 4);
+    this.usableHalfD = Math.max(sec.halfD, prMin + 7);
     this.sagGain = prof.floorSagGain;
-    this.billowGain = prof.billowGain;
     this.jawY = prof.innerLen;
 
     // Former stack: hopper funnel → round tube → bag mouth, all concentric with
@@ -204,27 +263,64 @@ export class FillSim {
   }
 
   private buildShell(): void {
-    const t = FillSim.WALL_T;
     // Walls run from below the deepest floor sag up to the jaw plane, so product
     // settling into the sagged belly can't slip out under the wall foot.
     this.wallBot = -(this.innerLen * 0.1 + 25);
-    this.wallHalfY = (this.innerLen - this.wallBot) / 2;
-    // Side walls (±x): thin in x, tall in y, deep in z.
-    const left = this.kinematicBox(t, this.wallHalfY, this.usableHalfD + t);
-    const right = this.kinematicBox(t, this.wallHalfY, this.usableHalfD + t);
-    // Front/back walls (±z): wide in x, tall in y, thin in z.
-    const front = this.kinematicBox(this.usableHalfW + t, this.wallHalfY, t);
-    const back = this.kinematicBox(this.usableHalfW + t, this.wallHalfY, t);
-    this.walls = { left, right, front, back };
+    // Elliptical film wall: a ring of thin static segments lying ON the formed
+    // cross-section, so the collider MATCHES the visible pillow profile at every
+    // height with no corner gaps. Product settles inside the same ellipse the film
+    // renders, so containment and the volume reconciliation are exact.
+    this.buildEllipseCage(this.usableHalfW, this.usableHalfD, this.wallBot, this.innerLen);
 
-    // Floor: a row of thick tiles across x (the sag direction), full depth in z.
-    const floorHalf = this.usableHalfW + 12;
+    // Floor: a row of thick sagging tiles across x, covering the full ellipse
+    // bounding box in both axes so nothing can rest past the bag footprint.
+    const floorHalf = this.usableHalfW + 14;
     const tileHalf = floorHalf / FillSim.N_FLOOR;
+    const floorHalfD = this.usableHalfD + 14;
     for (let i = 0; i < FillSim.N_FLOOR; i++) {
       const cx = -floorHalf + tileHalf * (2 * i + 1);
-      this.floorTiles.push(this.kinematicBox(tileHalf, FillSim.FLOOR_HALF_T, this.usableHalfD + 12, cx));
+      this.floorTiles.push(this.kinematicBox(tileHalf, FillSim.FLOOR_HALF_T, floorHalfD, cx));
     }
     this.positionShell();
+  }
+
+  /**
+   * A vertical ring of thin static wall segments lying on the ellipse
+   * (x/halfW)² + (z/halfD)² = 1, from yBot to yTop. Interior clearance = the
+   * ellipse itself, so this is the exact collider twin of the rendered film.
+   */
+  private buildEllipseCage(halfW: number, halfD: number, yBot: number, yTop: number): void {
+    const st = clamp01(this.params.stiff / 100);
+    const N = FillSim.N_WALL;
+    const T = FillSim.WALL_T;
+    const hy = (yTop - yBot) / 2;
+    const cy = (yBot + yTop) / 2;
+    // Generous tangential half-length so neighbours overlap even where the ellipse
+    // is flattest (widest point spacing) — no gaps for a thin disc to slip.
+    const segHalf = ((Math.PI * Math.max(halfW, halfD)) / N) * 1.9;
+    for (let i = 0; i < N; i++) {
+      const ang = (i / N) * Math.PI * 2;
+      const px = halfW * Math.cos(ang);
+      const pz = halfD * Math.sin(ang);
+      // Outward unit normal of the ellipse at this point.
+      let nx = px / (halfW * halfW);
+      let nz = pz / (halfD * halfD);
+      const nl = Math.hypot(nx, nz) || 1;
+      nx /= nl;
+      nz /= nl;
+      const psi = Math.atan2(nz, nx); // normal heading
+      const phi = Math.PI / 2 - psi; // yaw so local +z aligns with the normal
+      const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+      // Place the segment just OUTSIDE the ellipse so interior clearance = halfW/halfD.
+      body.setTranslation({ x: this.m(px + nx * T), y: this.m(cy), z: this.m(pz + nz * T) }, false);
+      body.setRotation({ x: 0, y: Math.sin(phi / 2), z: 0, w: Math.cos(phi / 2) }, false);
+      this.world.createCollider(
+        RAPIER.ColliderDesc.cuboid(this.m(segHalf), this.m(hy), this.m(T))
+          .setRestitution(0.02 + 0.1 * st)
+          .setFriction(0.6),
+        body,
+      );
+    }
   }
 
   private buildStatic(): void {
@@ -314,19 +410,14 @@ export class FillSim {
   }
 
   private positionShell(): void {
-    if (!this.walls) return;
-    const wcy = (this.innerLen + this.wallBot) / 2;
-    const hw = this.usableHalfW + this.billow + FillSim.WALL_T;
-    const hd = this.usableHalfD + FillSim.WALL_T;
-    const set = (k: Kinematic, x: number, y: number, z: number) =>
-      k.body.setNextKinematicTranslation({ x: this.m(x), y: this.m(y), z: this.m(z) });
-    set(this.walls.left, -hw, wcy, 0);
-    set(this.walls.right, hw, wcy, 0);
-    set(this.walls.front, 0, wcy, hd);
-    set(this.walls.back, 0, wcy, -hd);
-    // Thick tiles: top surface sits on the sag curve (centre is FLOOR_HALF_T below).
+    // The ellipse cage is static; only the sagging floor tiles move. Thick tiles:
+    // the top surface sits on the sag curve (centre is FLOOR_HALF_T below).
     for (const tile of this.floorTiles) {
-      set(tile, tile.restX, this.floorAt(tile.restX) - FillSim.FLOOR_HALF_T, 0);
+      tile.body.setNextKinematicTranslation({
+        x: this.m(tile.restX),
+        y: this.m(this.floorAt(tile.restX) - FillSim.FLOOR_HALF_T),
+        z: 0,
+      });
     }
   }
 
@@ -340,7 +431,6 @@ export class FillSim {
     this.settleT = 0;
     this.fillLine = 0;
     this.sag = 0;
-    this.billow = 0;
     this.status = "ready";
     this.positionShell();
   }
@@ -372,6 +462,31 @@ export class FillSim {
     };
   }
 
+  /**
+   * Near-flat spawn orientation for discs: fed through a forming tube, a disc
+   * falls roughly face-down (its axis near vertical) with a bounded random tilt
+   * and free spin — so discs land flat and stack, rather than jamming on edge
+   * (which reads as interpenetration and inflates headspace).
+   */
+  private flatQuat(maxTiltRad: number): { x: number; y: number; z: number; w: number } {
+    const tilt = maxTiltRad * Math.sqrt(this.rng.next()); // 0…maxTilt from vertical
+    const az = this.rng.next() * Math.PI * 2; // tilt azimuth
+    const spin = this.rng.next() * Math.PI * 2; // free spin about the disc axis
+    // q = spin about Y, then tilt about the horizontal axis (cos az, 0, sin az).
+    const hs = Math.sin(spin / 2), hc = Math.cos(spin / 2);
+    const qSpin = { x: 0, y: hs, z: 0, w: hc };
+    const ts = Math.sin(tilt / 2), tc = Math.cos(tilt / 2);
+    const ax = Math.cos(az), az2 = Math.sin(az);
+    const qTilt = { x: ax * ts, y: 0, z: az2 * ts, w: tc };
+    // qTilt * qSpin
+    return {
+      w: qTilt.w * qSpin.w - qTilt.x * qSpin.x - qTilt.y * qSpin.y - qTilt.z * qSpin.z,
+      x: qTilt.w * qSpin.x + qTilt.x * qSpin.w + qTilt.y * qSpin.z - qTilt.z * qSpin.y,
+      y: qTilt.w * qSpin.y - qTilt.x * qSpin.z + qTilt.y * qSpin.w + qTilt.z * qSpin.x,
+      z: qTilt.w * qSpin.z + qTilt.x * qSpin.y - qTilt.y * qSpin.x + qTilt.z * qSpin.w,
+    };
+  }
+
   private spawn(): void {
     const p = this.params.product;
     const st = clamp01(this.params.stiff / 100);
@@ -380,11 +495,14 @@ export class FillSim {
     const th = this.rng.next() * Math.PI * 2;
     const x = rr * Math.cos(th);
     const z = rr * Math.sin(th);
+    // Discs feed through the tube roughly face-down → near-flat so they stack;
+    // other shapes tumble freely.
+    const orient = p.round ? this.flatQuat(0.18) : this.randomQuat();
     const rbDesc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(this.m(x), this.m(this.spawnY), this.m(z))
-      .setRotation(this.randomQuat())
-      // Launch downward at the drop-height velocity, with a little scatter.
-      .setLinvel(this.rng.spread(0.15), -this.dropSpeed, this.rng.spread(0.15))
+      .setRotation(orient)
+      // Launch downward at the drop-height velocity, with a little lateral scatter.
+      .setLinvel(this.rng.spread(0.2), -this.dropSpeed, this.rng.spread(0.2))
       .setLinearDamping(0.05 + 0.5 * (1 - st))
       .setAngularDamping(0.3 + 0.6 * (1 - st))
       // Continuous collision so a fast piece can't tunnel the thin floor/walls.
@@ -392,7 +510,10 @@ export class FillSim {
     const rb = this.world.createRigidBody(rbDesc);
 
     const mass = Math.max(1e-4, this.params.unitWeight / 1000); // kg
-    const restitution = 0.04 + 0.12 * st;
+    // Low restitution so pieces settle dead instead of jittering apart. Friction
+    // 0.5 keeps the disc prisms from sliding apart (they need it to stack); the
+    // pile is spread by the lateral spawn scatter above, not by low friction.
+    const restitution = 0.02 + 0.06 * st;
     const collide = this.productCollider(p).setRestitution(restitution).setFriction(0.5).setMass(mass);
     this.world.createCollider(collide, rb);
     this.product.push(rb);
@@ -400,6 +521,23 @@ export class FillSim {
 
   private productCollider(p: ProductSpec): RAPIER.ColliderDesc {
     if (p.round) {
+      // Model the disc as a thin N-gon PRISM, not an analytic cylinder: Rapier's
+      // cylinder–cylinder contact between coplanar faces is a degenerate single
+      // point, so flat discs sink into each other instead of stacking. A convex
+      // polytope produces a stable multi-point face manifold, so discs pile.
+      const N = 16;
+      const r = p.w / 2;
+      const hy = this.m(p.h / 2);
+      const pts = new Float32Array(N * 2 * 3);
+      for (let i = 0; i < N; i++) {
+        const a = (i / N) * Math.PI * 2;
+        const x = this.m(r * Math.cos(a));
+        const z = this.m(r * Math.sin(a));
+        pts[i * 3] = x; pts[i * 3 + 1] = hy; pts[i * 3 + 2] = z;
+        pts[(N + i) * 3] = x; pts[(N + i) * 3 + 1] = -hy; pts[(N + i) * 3 + 2] = z;
+      }
+      const disc = RAPIER.ColliderDesc.convexHull(pts);
+      if (disc) return disc;
       return RAPIER.ColliderDesc.cylinder(this.m(p.h / 2), this.m(p.w / 2));
     }
     if (p.hull && p.hull.length >= 3) {
@@ -443,9 +581,7 @@ export class FillSim {
     }
     const load = (resting * this.params.unitWeight) / 50;
     const sagTarget = Math.min(this.innerLen * 0.1, load * this.sagGain * 1.6);
-    const billowTarget = Math.min(this.usableHalfW * 0.25, load * this.billowGain);
     this.sag += (sagTarget - this.sag) * Math.min(1, 3 * FIXED_DT);
-    this.billow += (billowTarget - this.billow) * Math.min(1, 3 * FIXED_DT);
     this.positionShell();
   }
 
@@ -474,7 +610,13 @@ export class FillSim {
       ke += s * s;
     }
     const avg = n ? Math.sqrt(ke / n) : 0;
-    const overfull = n > 0 && this.fillLine > this.innerLen;
+    // Overfull two ways: the pile crosses the jaw plane, OR product can't fit and
+    // backs up — pieces come to rest above the jaw (jammed in the throat/tube).
+    let backedUp = 0;
+    for (const b of this.product) {
+      if (this.speed(b) < REST_SPEED && this.appY(b) > this.jawY + this.productRadius) backedUp++;
+    }
+    const overfull = n > 0 && (this.fillLine > this.innerLen || backedUp >= 3);
     if (overfull) this.status = "overfull";
     else if (this.running) this.status = "filling";
     else if (this.settled) this.status = "settled";
@@ -504,7 +646,7 @@ export class FillSim {
   shell(): ShellState {
     return {
       innerLen: this.innerLen,
-      halfW: this.usableHalfW + this.billow,
+      halfW: this.usableHalfW,
       halfD: this.usableHalfD,
       sag: this.sag,
       jawY: this.jawY,
@@ -513,18 +655,47 @@ export class FillSim {
     };
   }
 
+  /**
+   * Live formed cross-section from the *settled* product volume. Empty → lay-flat;
+   * as the pile grows, the fixed film perimeter rounds out into depth. This is what
+   * the renderer bulges to, and what FORMED DEPTH reports.
+   */
+  private liveFormed(restingCount: number): { halfW: number; halfD: number; roundness: number } {
+    const st = clamp01(this.params.stiff / 100);
+    const settledVol = restingCount * this.pieceVolume;
+    const roundness = roundnessFromFill({
+      productVolume: settledVol,
+      flatHalfW: this.flatHalfW,
+      innerLen: this.innerLen,
+      stiffNorm: st,
+      packing: PACKING,
+    });
+    const sec = formedSection(this.flatHalfW, roundness);
+    return { halfW: sec.halfW, halfD: sec.halfD, roundness };
+  }
+
   measurements(): Measurements {
     const n = this.product.length;
     let resting = 0;
     for (const b of this.product) if (this.speed(b) < REST_SPEED && this.appY(b) < this.jawY) resting++;
     const hs = headspaceOf(this.innerLen, this.fillLine);
-    const crossW = 2 * this.usableHalfW;
-    const crossD = 2 * this.usableHalfD;
-    const fillVolume = n > 0 ? crossW * crossD * Math.max(0, this.fillLine) : 0;
+    // The bag interior is the formed ELLIPSE, not a rectangle — so the internal
+    // volume up to the fill line is the ellipse area × fill height.
+    const f = this.liveFormed(resting);
+    const formedAreaMm = formedArea(f);
+    const fillVolume = n > 0 ? formedAreaMm * Math.max(0, this.fillLine) : 0;
     const mass = n * this.params.unitWeight;
     const bulkDensity = fillVolume > 0 ? mass / fillVolume : 0;
-    const usable = crossW * crossD * this.innerLen;
+    // Usable capacity = the formed (collision) ellipse over the full inner length.
+    const usable = Math.PI * this.usableHalfW * this.usableHalfD * this.innerLen;
     const pctUsable = usable > 0 ? (fillVolume / usable) * 100 : 0;
+
+    // Consistency check: the formed internal volume must equal product solid +
+    // voids. reconcile = solid ÷ formed = the settled packing fraction (≈0.6–0.9
+    // for a disc pile; >1 would be impossible → product exceeds the bag volume).
+    const solidVol = n * this.pieceVolume;
+    const reconcile = fillVolume > 0 ? solidVol / fillVolume : 0;
+
     return {
       fillLine: this.fillLine,
       headspace: hs,
@@ -533,6 +704,30 @@ export class FillSim {
       fillVolume,
       bulkDensity,
       pctUsable,
+      formedDepth: 2 * f.halfD,
+      formedWidth: 2 * f.halfW,
+      formedRoundness: f.roundness,
+      formedVolume: fillVolume / 1000, // cm³
+      reconcile,
+    };
+  }
+
+  /** Live formed shell profile (belly cross-section + fill line) for the renderer. */
+  liveShell(): LiveShell {
+    let resting = 0;
+    for (const b of this.product) if (this.speed(b) < REST_SPEED && this.appY(b) < this.jawY) resting++;
+    const f = this.liveFormed(resting);
+    return {
+      innerLen: this.innerLen,
+      endSeal: this.params.bag.endSeal,
+      jawY: this.jawY,
+      flatHalfW: this.flatHalfW,
+      bellyHalfW: f.halfW,
+      bellyHalfD: f.halfD,
+      fillLine: this.fillLine,
+      roundness: f.roundness,
+      tubeR: this.tubeR,
+      tubeLen: this.tubeLen,
     };
   }
 
@@ -541,6 +736,7 @@ export class FillSim {
       innerLen: this.innerLen,
       usableHalfW: this.usableHalfW,
       usableHalfD: this.usableHalfD,
+      flatHalfW: this.flatHalfW,
       endSeal: this.params.bag.endSeal,
       jawY: this.jawY,
       spawnY: this.spawnY,
@@ -563,6 +759,24 @@ export class FillSim {
   get particleCount(): number {
     return this.product.length;
   }
+}
+
+/** Solid volume of one product piece (mm³) — matches the collider shape. */
+function pieceVolumeOf(p: ProductSpec): number {
+  if (p.round) return Math.PI * (p.w / 2) ** 2 * p.h; // cylinder
+  if (p.hull && p.hull.length >= 3) return polygonArea(p.hull) * p.h; // extruded silhouette
+  return p.w * p.h * p.depth; // cuboid
+}
+
+/** Absolute area (mm²) of a closed polygon via the shoelace formula. */
+function polygonArea(pts: { x: number; y: number }[]): number {
+  let a = 0;
+  for (let i = 0, n = pts.length; i < n; i++) {
+    const p = pts[i];
+    const q = pts[(i + 1) % n];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return Math.abs(a) / 2;
 }
 
 function clamp01(v: number): number {
