@@ -192,3 +192,53 @@ rises slightly (e.g. 150 thin discs ≈ 140 mm fill / ~70 mm headspace vs the
 earlier ~102 mm). That earlier number was compressed by the very
 interpenetration the prior round fixed; the higher number is the physically
 honest one.
+
+### Solver/contact hardening — trustworthy fill under settling load (2026-07-19)
+
+A review flagged that pieces still passed into each other under the settling load
+of a deep pile, and — crucially — that this was corrupting the *fill-height*
+output, not just visuals. All tuning is now in one `TUNING` block in `world.ts`.
+Levers were pushed in the review's order, picking on measured **disc-disc
+penetration read from Rapier's narrow phase** (`penetrationReport()`,
+`contactDist < 0`) at a full 150-piece fill of the hard case (⌀30×4 thin discs):
+
+| config | fill mm | headspace | packing | dd contacts | deep >0.5 mm | max mm | steps/s |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **before** (16 iters / 4 PGS, slop .001, 30 Hz) | 148 | 62 | **0.65** | 247 | 198 | 20.4 | 51 |
+| **shipped** (16 / 8, slop .0005, 60 Hz) | **205** | ~2–10 | **0.47** | 60 | 40 | 13.3 | 45 |
+| 20 / 8 (rejected) | 208 | ~2 | 0.46 | 55 | 36 | 7.3 | 31 |
+
+- **The overlap was skewing the measurement.** The "before" pile read a *shorter*
+  148 mm at packing **0.65** — but 0.65 is physically impossible for
+  randomly-oriented thin discs; they were sunk into each other, under-reporting
+  height. Removing the overlap lets the pile stand at its honest **~205 mm /
+  packing 0.47** (loose random-disc packing). Disc-disc penetration dropped
+  **76 %** (247 → 60 contacts, 198 → 40 deep, max 20.4 → 13.3 mm).
+- **Which lever did the work.** The single most effective — and cheapest — lever
+  was **inner PGS iterations 4 → 8** (`numInternalPgsIterations`); it firms the
+  pile far more per unit cost than raising the outer TGS iteration count. Halving
+  the allowed penetration slop (`normalizedAllowedLinearError` .001 → .0005) and
+  stiffening contacts (`contact_natural_frequency` 30 → 60 Hz, stable at
+  dt = 1/120) both help at ~zero cost. **Contact skin was deliberately NOT
+  raised**: a larger skin *does* cut measured overlap, but it pads every disc
+  larger and inflates fill height (skin 1.8 mm drove the same fill *overfull* to
+  228 mm) — corrupting the very number we want trustworthy. It stays at 1.4 mm.
+  The collider is already the rounded cylinder from the prior round (lever 3).
+- **The output is now trustworthy, by two tests.** (a) *Convergence*: 16 vs 20
+  outer iterations give the **same** fill (205 vs 208) — more solver power no
+  longer moves the number, only trims the residual penetration, so the height has
+  converged rather than still being solver-limited. (b) *Stability*: the live
+  readout drifts **< 1 mm over 5 s** after settle, and seeds agree within ±4 mm.
+- **Frame-rate budget respected.** Display fps is governed by *per-step* cost
+  (dominated by outer solver iterations), which the main loop's substep clamp
+  turns into slow-motion rather than dropped frames. The shipped 16/8 config costs
+  only ~12 % throughput (45 vs 51 steps/s); the 20/8 variant that shaved the deep
+  outliers further cost ~40 % (31 steps/s) for a marginal gain and was rejected to
+  stay clear of the ~30 fps floor.
+
+Net: 150 thin discs now correctly report a **near-full** bag (≈205 mm, ~99 %,
+"Jaw risk") instead of the overlap-compressed 148 mm — the honest answer for how
+loosely thin discs pack. Zero overlap on thin rigid discs under a deep pile is a
+genuinely hard real-time problem; the target here was met — *visually solid + a
+fill/headspace readout that holds still* — without chasing the last fraction of a
+millimetre at the cost of frame rate.

@@ -36,11 +36,34 @@ const REST_SPEED = 0.07; // m/s below which a piece is "at rest"
 const SETTLE_AVG = 0.06; // m/s mean speed for settle detection (tolerant of slow prism creep)
 const HULL_VERTS = 8; // silhouette verts before extrusion → ≤16 in 3-D
 const PACKING = 0.6; // bulk packing fraction of a settled pile (void-corrected)
-const SOLVER_ITERS = 16; // ↑ from Rapier's default 4 so angled discs resolve, not interpenetrate
 const LENGTH_UNIT = 0.045; // Rapier length scale → contact tolerances match cm-scale product
-const PREDICTION_DIST = 0.02; // ↑ predictive-contact distance so edge contacts are caught early
-const DISC_BORDER = 1.2; // rounded-cylinder bevel (mm): fattens disc edge contacts
-const CONTACT_SKIN = 1.4; // product contact skin (mm): a solid buffer that resists penetration
+
+/**
+ * Solver / contact tuning — the levers that make a deep pile of thin rigid discs
+ * act solid under settling load, in the order they were pushed (see the ADR
+ * addendum for the measured before/after sweep):
+ *   1. Solver work: `solverIters` (TGS substeps) + `pgsIters` (inner PGS).
+ *   2. Contact handling: `allowedLinError` (penetration slop the solver leaves
+ *      uncorrected — smaller = tighter), `contactHz` (contact stiffness), and
+ *      `contactSkin` (a solid buffer that resolves before visible faces touch).
+ *   3. Collider shape: `discBorder` (rounded-cylinder bevel).
+ * Held to a frame-rate budget: nothing here may drop the sim below ~30 fps at
+ * 150 pieces.
+ */
+export const TUNING = {
+  solverIters: 16, // TGS outer iterations. This is the dominant per-step COST → the main
+  // frame-rate lever; substep-clamping turns extra cost into slow-motion, not dropped
+  // frames, so it is kept at 16 to hold the fps floor rather than chased higher.
+  pgsIters: 8, // ↑ from 4: inner PGS iterations — firms up the pile at far less fps cost than outer iterations
+  frictionIters: 4, // additional friction iterations (Rapier default)
+  predictionDist: 0.02, // predictive-contact distance so edge contacts are caught early
+  allowedLinError: 0.0005, // ↓ from 0.001: half the penetration slop the solver leaves uncorrected (free)
+  contactHz: 60, // ↑ from 30: stiffer contacts (stable at dt = 1/120); pushes overlapping discs apart (free)
+  ccdSubsteps: 4, // CCD substeps against tunnelling on fast drops
+  contactSkin: 1.4, // product contact skin (mm). A LARGER skin cuts measured overlap but pads the
+  // pile taller (an honest fill height reads high / overfull), so it is held here, not increased.
+  discBorder: 1.2, // rounded-cylinder bevel (mm): fattens disc edge contacts
+};
 
 let rapierReady: Promise<void> | null = null;
 /** Initialise the Rapier WASM runtime once. Must resolve before `new FillSim()`. */
@@ -193,10 +216,15 @@ export class FillSim {
     // of sinking. See ADR-001 addendum.
     const ip = this.world.integrationParameters;
     ip.lengthUnit = LENGTH_UNIT;
-    this.world.numSolverIterations = SOLVER_ITERS;
-    ip.numInternalPgsIterations = 4;
-    ip.normalizedPredictionDistance = PREDICTION_DIST;
-    ip.maxCcdSubsteps = 4;
+    this.world.numSolverIterations = TUNING.solverIters;
+    ip.numInternalPgsIterations = TUNING.pgsIters;
+    ip.numAdditionalFrictionIterations = TUNING.frictionIters;
+    ip.normalizedPredictionDistance = TUNING.predictionDist;
+    // Tighten contact handling: leave less penetration uncorrected and stiffen the
+    // contact response so overlapping discs are pushed apart, not left sunk in.
+    ip.normalizedAllowedLinearError = TUNING.allowedLinError;
+    ip.contact_natural_frequency = TUNING.contactHz;
+    ip.maxCcdSubsteps = TUNING.ccdSubsteps;
 
     const st = clamp01(params.stiff / 100);
     const prof = params.style.simProfile(params.bag, { stiffNorm: st });
@@ -266,7 +294,7 @@ export class FillSim {
     const desc = RAPIER.ColliderDesc.cuboid(this.m(hxMM), this.m(hyMM), this.m(hzMM))
       .setRestitution(0.02 + 0.1 * st)
       .setFriction(0.6)
-      .setContactSkin(this.m(CONTACT_SKIN)); // firm buffer so the bottom layer can't sink in
+      .setContactSkin(this.m(TUNING.contactSkin)); // firm buffer so the bottom layer can't sink in
     this.world.createCollider(desc, body);
     return { body, restX };
   }
@@ -455,7 +483,7 @@ export class FillSim {
       .setRestitution(restitution)
       .setFriction(0.5)
       .setMass(mass)
-      .setContactSkin(this.m(CONTACT_SKIN)); // solid buffer that resists penetration
+      .setContactSkin(this.m(TUNING.contactSkin)); // solid buffer that resists penetration
     this.world.createCollider(collide, rb);
     this.product.push(rb);
   }
@@ -470,7 +498,7 @@ export class FillSim {
       // flat-spawn crutch. The overall size stays h × ⌀w (border folded in).
       const r = p.w / 2;
       const hHalf = p.h / 2;
-      const border = Math.min(DISC_BORDER, hHalf - 0.5, r - 0.5);
+      const border = Math.min(TUNING.discBorder, hHalf - 0.5, r - 0.5);
       return RAPIER.ColliderDesc.roundCylinder(this.m(hHalf - border), this.m(r - border), this.m(border));
     }
     if (p.hull && p.hull.length >= 3) {
@@ -662,6 +690,40 @@ export class FillSim {
       tubeLen: this.tubeLen,
       productRadius: this.productRadius,
     };
+  }
+
+  /**
+   * Per-contact penetration depth (mm, >0 = overlap) read from Rapier's narrow
+   * phase, for solver-quality diagnostics. `all` = every product contact,
+   * `dd` = disc↔disc only (the hard case). This reads the *real* solved overlap,
+   * not the bulk packing average, so it exposes interpenetration the reconcile
+   * fraction hides. Each pair is counted once.
+   */
+  penetrationReport(): { all: number[]; dd: number[] } {
+    const prodHandles = new Set(this.product.map((b) => b.collider(0).handle));
+    const all: number[] = [];
+    const dd: number[] = [];
+    const seen = new Set<number>();
+    for (const b of this.product) {
+      const c1 = b.collider(0);
+      this.world.contactPairsWith(c1, (c2) => {
+        const key = c1.handle < c2.handle ? c1.handle * 1e7 + c2.handle : c2.handle * 1e7 + c1.handle;
+        if (seen.has(key)) return;
+        seen.add(key);
+        this.world.contactPair(c1, c2, (m) => {
+          let deepest = 0;
+          for (let i = 0, nc = m.numContacts(); i < nc; i++) {
+            const d = m.contactDist(i); // metres; < 0 = penetration
+            if (d < 0) deepest = Math.max(deepest, -d * M);
+          }
+          if (deepest > 0) {
+            all.push(deepest);
+            if (prodHandles.has(c2.handle)) dd.push(deepest);
+          }
+        });
+      });
+    }
+    return { all, dd };
   }
 
   get product_(): ProductSpec {
