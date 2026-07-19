@@ -11,7 +11,6 @@
 
 import {
   innerLength,
-  usableHalfWidth,
   webWidth,
   cutoffLength,
   panelBoundaries,
@@ -28,21 +27,20 @@ import type {
 
 function simProfile(p: BagParams, opts: SimProfileOpts): SimProfile {
   const st = opts.stiffNorm;
-  const uhw = usableHalfWidth(p.bagW, st);
-  // Formed pillow depth is the dimension stiffness governs most: a limp film
-  // rounds out into a deep belly (more volume → product settles low); a stiff
-  // film stays flat/planar (shallow → product stacks tall). This wide swing is
-  // what makes the stiffness slider visibly move fill height and headspace.
-  const usableHalfD = uhw * (1.0 - 0.7 * st);
+  // Perimeter conservation: the flat film's circumference is fixed by the bag
+  // width (≈ the lay-flat face), INDEPENDENT of stiffness — so the empty bag
+  // width never swings with the stiffness slider; it stays at nominal. Stiffness
+  // only changes how round that fixed perimeter becomes AS PRODUCT FILLS (see
+  // roundnessFromFill): a stiff film holds a rounder, deeper section, a limp film
+  // collapses flatter and wider. Pre-fill the bag is lay-flat regardless.
+  const flatHalfW = p.bagW / 2;
   return {
     innerLen: innerLength(p.bagL, p.endSeal),
-    usableHalfW: uhw,
-    usableHalfD,
+    usableHalfW: flatHalfW,
+    usableHalfD: 0.5, // lay-flat when empty; depth is emergent from the fill
     floorSagGain: 2.6 - 2.2 * st,
     billowGain: 0.6 - 0.45 * st,
-    // Perimeter conservation: the flat film (circumference 4·uhw) rounds from
-    // flat toward round as product fills, so depth is emergent and bounded.
-    section: { kind: "pillow", flatHalfW: uhw },
+    section: { kind: "pillow", flatHalfW },
   };
 }
 

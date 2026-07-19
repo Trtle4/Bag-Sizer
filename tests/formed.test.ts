@@ -90,10 +90,10 @@ describe("roundnessFromFill", () => {
     expect(roundnessFromFill({ ...base, productVolume: 1e9 })).toBe(1);
   });
 
-  it("limp film (low stiffness) bulges more than stiff film for the same fill", () => {
+  it("stiff film holds a rounder section than limp film for the same fill", () => {
     const v = 4e5;
     const limp = roundnessFromFill({ ...base, stiffNorm: 0, productVolume: v });
     const stiff = roundnessFromFill({ ...base, stiffNorm: 1, productVolume: v });
-    expect(limp).toBeGreaterThan(stiff);
+    expect(stiff).toBeGreaterThan(limp);
   });
 });

@@ -124,6 +124,10 @@ function syncStyleFields(): void {
   const s = store.get();
   // Gusset depth only applies to the gusset-bearing styles.
   $("fGusset").style.display = s.style === "pillow" ? "none" : "";
+  // Keep the spec-panel headers in step with the selected style.
+  const label = getBagStyle(s.style).label;
+  $("tbStyle").textContent = `${label} Bag`;
+  $("msStyle").textContent = `${label} bag · VFFS`;
 }
 bindSeg("segStyle", "style", syncStyleFields);
 
