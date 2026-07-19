@@ -165,6 +165,7 @@ export class FillSim {
   private running = false;
   private settled = false;
   private settleT = 0;
+  private emptyT = 0; // time since the last piece spawned (s) — settle-timeout fallback
   private fillLine = 0;
   private status: SimStatus = "ready";
 
@@ -414,6 +415,7 @@ export class FillSim {
     this.running = false;
     this.settled = false;
     this.settleT = 0;
+    this.emptyT = 0;
     this.fillLine = 0;
     this.status = "ready";
     this.positionShell();
@@ -462,11 +464,14 @@ export class FillSim {
       .setRotation(orient)
       // Released AT REST (vy = 0) → real free-fall under gravity, so the impact
       // speed is √(2·g·dropH), not a capped launch velocity. A little lateral
-      // scatter only. Damping is minimal so the fall isn't slowed like air drag;
-      // CCD (not a speed cap) stops any tunnelling.
+      // scatter only. Linear damping is kept LOW so the fall speed stays physical
+      // (see freefall.test.ts); a settled pile is brought to rest by forced
+      // sleeping (below), not by faking air drag. Angular damping is high — it
+      // does not touch the vertical fall speed but bleeds the rotational rocking
+      // that keeps a packed pile of thin discs alive. CCD stops tunnelling.
       .setLinvel(this.rng.spread(0.1), 0, this.rng.spread(0.1))
-      .setLinearDamping(0.02)
-      .setAngularDamping(0.3 + 0.6 * (1 - st))
+      .setLinearDamping(0.1)
+      .setAngularDamping(1.5 + 1.5 * (1 - st))
       .setCcdEnabled(true);
     const rb = this.world.createRigidBody(rbDesc);
 
@@ -567,16 +572,35 @@ export class FillSim {
     else if (this.settled) this.status = "settled";
     else this.status = "ready";
 
-    if (this.running && this.queue === 0 && n > 0 && avg < SETTLE_AVG) {
-      this.settleT += FIXED_DT;
-      if (this.settleT > 0.6) {
+    if (this.running && this.queue === 0 && n > 0) {
+      this.emptyT += FIXED_DT;
+      if (avg < SETTLE_AVG) this.settleT += FIXED_DT;
+      else this.settleT = 0;
+      // Settle when the pile is quiet (thin discs reach this fast) OR when a
+      // stubborn pile has had a couple of seconds to shed its fall energy but
+      // won't cross the absolute velocity line — heavier product jitters at a
+      // higher floor, so an absolute threshold alone can't fit every size.
+      if (this.settleT > 0.6 || this.emptyT > 2.5) {
         this.running = false;
         this.settled = true;
         this.status = overfull ? "overfull" : "settled";
+        // Force the whole pile to sleep. Rapier's auto-sleep threshold is scaled
+        // by the small lengthUnit and is effectively unreachable at this scale, so
+        // a near-settled pile would micro-jitter forever (fill height never
+        // stabilises). Sleeping deactivates the bodies: velocities go to zero and
+        // positions freeze, so the readout holds still. Nothing spawns after
+        // settle, so they stay asleep (a contact would wake them if it did).
+        this.sleepPile();
       }
     } else {
       this.settleT = 0;
+      if (this.queue > 0) this.emptyT = 0;
     }
+  }
+
+  /** Deactivate every product body so a settled pile is truly at rest. */
+  private sleepPile(): void {
+    for (const b of this.product) b.sleep();
   }
 
   // ---- accessors ----
@@ -744,6 +768,21 @@ export class FillSim {
 
   get isActive(): boolean {
     return this.running || this.product.some((b) => this.speed(b) > 0.02);
+  }
+
+  /** Settling diagnostics (m/s): mean/max speed and how many bodies are asleep. */
+  restDebug(): { n: number; avg: number; max: number; sleeping: number } {
+    const n = this.product.length;
+    let ke = 0;
+    let max = 0;
+    let sleeping = 0;
+    for (const b of this.product) {
+      const s = this.speed(b);
+      ke += s * s;
+      if (s > max) max = s;
+      if (b.isSleeping()) sleeping++;
+    }
+    return { n, avg: n ? Math.sqrt(ke / n) : 0, max, sleeping };
   }
 
   get particleCount(): number {
