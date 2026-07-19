@@ -297,3 +297,34 @@ piece is drawn ~1 skin (~1.4 mm) larger on top, so the *drawn* pile crest sits
 ~1.4 mm above the measured fill line — a small **constant** offset that does not
 grow with fill, so it cannot make a partly-empty bag look full. Trust the
 headspace number over the eye for the last millimetre or two.
+
+### A settled pile must actually stop — forced sleep (2026-07-19)
+
+A review flagged the pile staying "alive": pieces jitter/bounce and never fully
+rest, so the fill height keeps drifting. Diagnosed by logging the velocity/sleep
+timeline after a drop — the cause was **not** interpenetration at the spawn mouth
+(pieces release 0.13 s apart, ~83 mm apart in free-fall, and settled disc-disc
+penetration is unchanged). It was two things:
+
+- **Sleeping never fired.** `sleeping = 0 / N` for the entire run. Rapier's
+  auto-sleep linear threshold is scaled by `lengthUnit`, so at 0.045 it is
+  ~0.0045 m/s — unreachable for a real pile — and the JS API exposes no setter to
+  raise it. So bodies were never deactivated and the solver kept nudging the
+  packed discs every step (avg ~0.03–0.07 m/s, max ~0.2 m/s **forever**; fill
+  oscillating ±10 mm).
+- **Damping too low** (0.02) to bleed that residual energy — a hangover from the
+  free-fall round, which kept damping minimal so the drop speed stayed physical.
+
+Fix: **force the pile to sleep once settled** (`sleepPile()` calls `body.sleep()`
+on the settle transition) — velocities go to zero and positions freeze, so the
+readout holds still; nothing spawns afterward, so they stay asleep. The settle
+trigger is `avg < 0.06 m/s for 0.6 s` **or** a `2.5 s` timeout after the last
+piece, because heavier product jitters at a higher floor than an absolute
+velocity line can catch (thin ⌀30×4 settle in ~0.8 s on the velocity test; thick
+⌀30×12 via the 2.5 s timeout). Linear damping is raised 0.02 → **0.1** (free-fall
+still 6.12 vs 6.26 m/s = 2.2 %, well inside the 5 % assertion) and **angular**
+damping raised hard (`1.5 + 1.5·(1−stiff)`) — angular is a free lever, it bleeds
+the rotational rocking without touching the vertical fall speed. `settle.test.ts`
+asserts a dropped pile reaches every-body-asleep / zero velocity with a fill that
+then holds still, for both a thin and a thick pile. Anti-overlap and fill numbers
+from the previous rounds are unchanged.
