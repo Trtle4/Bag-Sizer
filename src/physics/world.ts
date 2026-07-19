@@ -26,7 +26,7 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import { Rng } from "./rng.js";
 import { simplifyHull } from "../geometry/hull.js";
 import { headspace as headspaceOf } from "../geometry/index.js";
-import { formedSection, roundnessFromFill, formedArea } from "../geometry/formed.js";
+import { formedSection, roundnessFromFill } from "../geometry/formed.js";
 import type { BagParams, BagStyle } from "../bagstyles/types.js";
 
 const MM = 0.001; // mm → m
@@ -36,8 +36,11 @@ const REST_SPEED = 0.07; // m/s below which a piece is "at rest"
 const SETTLE_AVG = 0.06; // m/s mean speed for settle detection (tolerant of slow prism creep)
 const HULL_VERTS = 8; // silhouette verts before extrusion → ≤16 in 3-D
 const PACKING = 0.6; // bulk packing fraction of a settled pile (void-corrected)
-const SOLVER_ITERS = 12; // ↑ from Rapier's default 4 so thin discs stack, not interpenetrate
+const SOLVER_ITERS = 16; // ↑ from Rapier's default 4 so angled discs resolve, not interpenetrate
 const LENGTH_UNIT = 0.045; // Rapier length scale → contact tolerances match cm-scale product
+const PREDICTION_DIST = 0.02; // ↑ predictive-contact distance so edge contacts are caught early
+const DISC_BORDER = 1.2; // rounded-cylinder bevel (mm): fattens disc edge contacts
+const CONTACT_SKIN = 0.6; // product contact skin (mm): a solid buffer that resists penetration
 
 let rapierReady: Promise<void> | null = null;
 /** Initialise the Rapier WASM runtime once. Must resolve before `new FillSim()`. */
@@ -188,9 +191,16 @@ export class FillSim {
     // swallow a thin disc and the whole stack collapses. Scaling lengthUnit to the
     // product scale shrinks the slop proportionally so discs stack instead of
     // interpenetrating. Extra solver iterations firm up the pile.
-    this.world.integrationParameters.lengthUnit = LENGTH_UNIT;
+    // Contact quality (a collider/contact study on the mm→m scale settled these):
+    // scale tolerances to cm-scale parts, widen the prediction distance and raise
+    // solver + CCD iterations so angled discs resolve their edge contacts instead
+    // of sinking. See ADR-001 addendum.
+    const ip = this.world.integrationParameters;
+    ip.lengthUnit = LENGTH_UNIT;
     this.world.numSolverIterations = SOLVER_ITERS;
-    this.world.integrationParameters.numInternalPgsIterations = 4;
+    ip.numInternalPgsIterations = 4;
+    ip.normalizedPredictionDistance = PREDICTION_DIST;
+    ip.maxCcdSubsteps = 4;
 
     const st = clamp01(params.stiff / 100);
     const prof = params.style.simProfile(params.bag, { stiffNorm: st });
@@ -462,31 +472,6 @@ export class FillSim {
     };
   }
 
-  /**
-   * Near-flat spawn orientation for discs: fed through a forming tube, a disc
-   * falls roughly face-down (its axis near vertical) with a bounded random tilt
-   * and free spin — so discs land flat and stack, rather than jamming on edge
-   * (which reads as interpenetration and inflates headspace).
-   */
-  private flatQuat(maxTiltRad: number): { x: number; y: number; z: number; w: number } {
-    const tilt = maxTiltRad * Math.sqrt(this.rng.next()); // 0…maxTilt from vertical
-    const az = this.rng.next() * Math.PI * 2; // tilt azimuth
-    const spin = this.rng.next() * Math.PI * 2; // free spin about the disc axis
-    // q = spin about Y, then tilt about the horizontal axis (cos az, 0, sin az).
-    const hs = Math.sin(spin / 2), hc = Math.cos(spin / 2);
-    const qSpin = { x: 0, y: hs, z: 0, w: hc };
-    const ts = Math.sin(tilt / 2), tc = Math.cos(tilt / 2);
-    const ax = Math.cos(az), az2 = Math.sin(az);
-    const qTilt = { x: ax * ts, y: 0, z: az2 * ts, w: tc };
-    // qTilt * qSpin
-    return {
-      w: qTilt.w * qSpin.w - qTilt.x * qSpin.x - qTilt.y * qSpin.y - qTilt.z * qSpin.z,
-      x: qTilt.w * qSpin.x + qTilt.x * qSpin.w + qTilt.y * qSpin.z - qTilt.z * qSpin.y,
-      y: qTilt.w * qSpin.y - qTilt.x * qSpin.z + qTilt.y * qSpin.w + qTilt.z * qSpin.x,
-      z: qTilt.w * qSpin.z + qTilt.x * qSpin.y - qTilt.y * qSpin.x + qTilt.z * qSpin.w,
-    };
-  }
-
   private spawn(): void {
     const p = this.params.product;
     const st = clamp01(this.params.stiff / 100);
@@ -495,9 +480,10 @@ export class FillSim {
     const th = this.rng.next() * Math.PI * 2;
     const x = rr * Math.cos(th);
     const z = rr * Math.sin(th);
-    // Discs feed through the tube roughly face-down → near-flat so they stack;
-    // other shapes tumble freely.
-    const orient = p.round ? this.flatQuat(0.18) : this.randomQuat();
+    // Product enters with a random orientation and is reoriented only by the
+    // funnel + tube on the way down — no artificial flat spawn. The rounded-
+    // cylinder collider settles the resulting angled contacts cleanly.
+    const orient = this.randomQuat();
     const rbDesc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(this.m(x), this.m(this.spawnY), this.m(z))
       .setRotation(orient)
@@ -514,31 +500,27 @@ export class FillSim {
     // 0.5 keeps the disc prisms from sliding apart (they need it to stack); the
     // pile is spread by the lateral spawn scatter above, not by low friction.
     const restitution = 0.02 + 0.06 * st;
-    const collide = this.productCollider(p).setRestitution(restitution).setFriction(0.5).setMass(mass);
+    const collide = this.productCollider(p)
+      .setRestitution(restitution)
+      .setFriction(0.5)
+      .setMass(mass)
+      .setContactSkin(this.m(CONTACT_SKIN)); // solid buffer that resists penetration
     this.world.createCollider(collide, rb);
     this.product.push(rb);
   }
 
   private productCollider(p: ProductSpec): RAPIER.ColliderDesc {
     if (p.round) {
-      // Model the disc as a thin N-gon PRISM, not an analytic cylinder: Rapier's
-      // cylinder–cylinder contact between coplanar faces is a degenerate single
-      // point, so flat discs sink into each other instead of stacking. A convex
-      // polytope produces a stable multi-point face manifold, so discs pile.
-      const N = 16;
+      // Round product = a ROUNDED cylinder (bevelled edge), not an analytic
+      // cylinder or a polytope. A collider/contact study (ADR-001 addendum)
+      // showed the sharp cylinder edge and the prism's coplanar faces both sink
+      // under random (funnel-fed) orientation; the rounded edge fattens the
+      // edge/corner contact so angled discs settle at ~physical packing without a
+      // flat-spawn crutch. The overall size stays h × ⌀w (border folded in).
       const r = p.w / 2;
-      const hy = this.m(p.h / 2);
-      const pts = new Float32Array(N * 2 * 3);
-      for (let i = 0; i < N; i++) {
-        const a = (i / N) * Math.PI * 2;
-        const x = this.m(r * Math.cos(a));
-        const z = this.m(r * Math.sin(a));
-        pts[i * 3] = x; pts[i * 3 + 1] = hy; pts[i * 3 + 2] = z;
-        pts[(N + i) * 3] = x; pts[(N + i) * 3 + 1] = -hy; pts[(N + i) * 3 + 2] = z;
-      }
-      const disc = RAPIER.ColliderDesc.convexHull(pts);
-      if (disc) return disc;
-      return RAPIER.ColliderDesc.cylinder(this.m(p.h / 2), this.m(p.w / 2));
+      const hHalf = p.h / 2;
+      const border = Math.min(DISC_BORDER, hHalf - 0.5, r - 0.5);
+      return RAPIER.ColliderDesc.roundCylinder(this.m(hHalf - border), this.m(r - border), this.m(border));
     }
     if (p.hull && p.hull.length >= 3) {
       const sil = simplifyHull(p.hull, HULL_VERTS);
@@ -679,20 +661,21 @@ export class FillSim {
     let resting = 0;
     for (const b of this.product) if (this.speed(b) < REST_SPEED && this.appY(b) < this.jawY) resting++;
     const hs = headspaceOf(this.innerLen, this.fillLine);
-    // The bag interior is the formed ELLIPSE, not a rectangle — so the internal
-    // volume up to the fill line is the ellipse area × fill height.
+    // The bag interior is the formed ELLIPSE the product actually sits in (the
+    // collision film), so the internal volume up to the fill line is that ellipse
+    // area × fill height. (The live section `f` below is the belly shape used for
+    // the FORMED DEPTH readout, which bulges with fill.)
+    const bagCrossArea = Math.PI * this.usableHalfW * this.usableHalfD;
     const f = this.liveFormed(resting);
-    const formedAreaMm = formedArea(f);
-    const fillVolume = n > 0 ? formedAreaMm * Math.max(0, this.fillLine) : 0;
+    const fillVolume = n > 0 ? bagCrossArea * Math.max(0, this.fillLine) : 0;
     const mass = n * this.params.unitWeight;
     const bulkDensity = fillVolume > 0 ? mass / fillVolume : 0;
-    // Usable capacity = the formed (collision) ellipse over the full inner length.
-    const usable = Math.PI * this.usableHalfW * this.usableHalfD * this.innerLen;
+    const usable = bagCrossArea * this.innerLen;
     const pctUsable = usable > 0 ? (fillVolume / usable) * 100 : 0;
 
-    // Consistency check: the formed internal volume must equal product solid +
-    // voids. reconcile = solid ÷ formed = the settled packing fraction (≈0.6–0.9
-    // for a disc pile; >1 would be impossible → product exceeds the bag volume).
+    // Consistency check: the bag internal volume must equal product solid + voids.
+    // reconcile = solid ÷ bag internal = the settled packing fraction (≈0.9–1.0
+    // for a dense disc pile; a value well over 1 would flag interpenetration).
     const solidVol = n * this.pieceVolume;
     const reconcile = fillVolume > 0 ? solidVol / fillVolume : 0;
 
