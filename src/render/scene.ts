@@ -14,6 +14,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { FillSim, ProductSpec, LiveShell } from "../physics/world.js";
+import { TUNING } from "../physics/world.js";
 import { simplifyHull } from "../geometry/hull.js";
 
 export type CameraMode = "iso" | "front" | "side";
@@ -340,23 +341,47 @@ export class SceneRenderer {
   }
 }
 
-/** Build product geometry matching the collider for a shape. Centred at origin. */
+/**
+ * Build product geometry matching the collider for a shape. Centred at origin.
+ *
+ * Drawn at the piece's *effective contact size* — the nominal shape grown by the
+ * physics contact skin — because the solver holds neighbours a skin apart on
+ * every side (that keep-apart buffer is what stops thin rigid discs knifing into
+ * each other; it is irreducible, see docs/ADR-001). Drawing the bare nominal
+ * shape leaves a ~2·skin gap so pieces read as "floating apart"; drawing them at
+ * contact size closes that gap so the pile looks solid. This is render-only — the
+ * fill-height/headspace measurement and every dimension callout/export stay at
+ * the true nominal spec.
+ */
 function buildProductGeometry(spec: ProductSpec): THREE.BufferGeometry {
+  const s = TUNING.contactSkin; // mm of skin added around the collider on every side
   if (spec.round) {
-    return new THREE.CylinderGeometry(spec.w / 2, spec.w / 2, spec.h, 24);
+    return new THREE.CylinderGeometry(spec.w / 2 + s, spec.w / 2 + s, spec.h + 2 * s, 24);
   }
   if (spec.hull && spec.hull.length >= 3) {
     const sil = simplifyHull(spec.hull, 8);
+    // Grow the silhouette outward from its centroid by ~skin so the in-plane
+    // footprint also matches the contact size.
+    const cx = sil.reduce((a, v) => a + v.x, 0) / sil.length;
+    const cy = sil.reduce((a, v) => a + v.y, 0) / sil.length;
     const shape = new THREE.Shape();
-    sil.forEach((v, i) => (i === 0 ? shape.moveTo(v.x, v.y) : shape.lineTo(v.x, v.y)));
+    sil.forEach((v, i) => {
+      const dx = v.x - cx;
+      const dy = v.y - cy;
+      const r = Math.hypot(dx, dy) || 1;
+      const x = cx + dx * (1 + s / r);
+      const y = cy + dy * (1 + s / r);
+      i === 0 ? shape.moveTo(x, y) : shape.lineTo(x, y);
+    });
     shape.closePath();
-    const geo = new THREE.ExtrudeGeometry(shape, { depth: spec.h, bevelEnabled: false });
-    geo.translate(0, 0, -spec.h / 2);
+    const depth = spec.h + 2 * s;
+    const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false });
+    geo.translate(0, 0, -depth / 2);
     geo.rotateX(-Math.PI / 2); // shape XY (=XZ silhouette) extruded Z → up Y
     geo.center();
     return geo;
   }
-  return new THREE.BoxGeometry(spec.w, spec.h, spec.depth);
+  return new THREE.BoxGeometry(spec.w + 2 * s, spec.h + 2 * s, spec.depth + 2 * s);
 }
 
 /**

@@ -285,6 +285,15 @@ And the solver cannot substitute for it: at skin 0.5, doubling inner PGS (8 → 
 or outer iterations (16 → 24) still leaves 122–155 deep overlaps vs 42 at skin 1.4.
 So there is **no skin below 1.4 that removes the float without bringing back the
 overlap we just fixed** — the float is the visible cost of a trustworthy fill.
-The skin is left at 1.4; closing the *visual* gap (drawing product at contact
-size, or another route) is deferred as a rendering decision, not a physics one,
-since it must not touch the fill-height result.
+
+**Resolution — close the gap in the render, not the physics.** The skin stays at
+1.4 mm (real to the solver). The *render* draws each piece at its **effective
+contact size** — the nominal shape grown by the skin (`buildProductGeometry` in
+`render/scene.ts`) — so neighbours held a skin apart visually touch and the pile
+reads solid. This is render-only: the physics, the fill-height/headspace
+measurement, and every dimension callout and export stay at the true **nominal**
+spec (they read `prodDims`/`measurements`, never the mesh). One honest caveat: a
+piece is drawn ~1 skin (~1.4 mm) larger on top, so the *drawn* pile crest sits
+~1.4 mm above the measured fill line — a small **constant** offset that does not
+grow with fill, so it cannot make a partly-empty bag look full. Trust the
+headspace number over the eye for the last millimetre or two.
