@@ -242,3 +242,49 @@ loosely thin discs pack. Zero overlap on thin rigid discs under a deep pile is a
 genuinely hard real-time problem; the target here was met — *visually solid + a
 fill/headspace readout that holds still* — without chasing the last fraction of a
 millimetre at the cost of frame rate.
+
+### Gusseted + SUP cross-sections; stiffness perimeter conservation (2026-07-19)
+
+- **Two more styles, one cage.** Gusseted and SUP are enabled from their stubs.
+  `SimProfile` now carries a `SectionModel`: `pillow` (perimeter conservation) or
+  `boxed` (a gusset defines the depth; the ellipse opens from `openFloor` toward
+  `halfW × halfD` with fill). The physics resolves either to the *same* elliptical
+  wall cage, so containment is style-agnostic — verified: a full fill on the
+  gusset/SUP cross-sections keeps every piece inside the cage (escX = escZ = 0),
+  identical to pillow. (The 3-D shell is still lofted as a pillow body; bespoke
+  gusset/SUP shell geometry is future polish. Cross-section depth and containment
+  are correct — gusseted reads ~40 mm formed depth, SUP ~34 mm, vs pillow ~28 mm.)
+
+- **Stiffness no longer reshapes the empty bag.** The conserved film perimeter is
+  now fixed by the bag width (`flatHalfW = bagW/2`), *independent of stiffness* —
+  previously an `edgeTuck(stiffness)` term shrank it, so the empty bag visibly
+  narrowed as the slider moved. It doesn't any more (verified: empty pillow is
+  140 mm wide and ~1 mm deep at both stiffness 5 and 95). Stiffness acts *only*
+  through the fill: `roundnessFromFill` was also corrected in direction — a **stiff
+  film holds a rounder, deeper** section, a limp film collapses flatter and wider
+  (the physically right way round; it was reversed). Pre-fill, `phi = 0` → roundness
+  0 regardless, so the slider does nothing until product inflates the bag.
+
+### Contact-skin float vs interpenetration — a measured, irreducible trade
+
+A review flagged resting pieces floating apart (~2·skin gap) and asked to shrink
+the contact skin to the minimum that kills the float *without* the overlap
+returning. Measured (150 thin ⌀30×4, disc-disc penetration from `penetrationReport`):
+
+| skin mm | fill mm | deep >0.5 mm | max mm |
+| --- | --- | --- | --- |
+| **1.4 (current)** | 178 | **42** | ~5–13 |
+| 0.8 | 127 | 122 | 14.2 |
+| 0.6 | 123 | 129 | 15.2 |
+| 0.1 | 101 | 267 | 16.0 |
+| 0.02 | 96 | 276 | 24.4 |
+
+Reducing the skin monotonically **reintroduces the overlap and re-compresses the
+fill** — the skin *is* the anti-interpenetration mechanism for thin rigid discs.
+And the solver cannot substitute for it: at skin 0.5, doubling inner PGS (8 → 16)
+or outer iterations (16 → 24) still leaves 122–155 deep overlaps vs 42 at skin 1.4.
+So there is **no skin below 1.4 that removes the float without bringing back the
+overlap we just fixed** — the float is the visible cost of a trustworthy fill.
+The skin is left at 1.4; closing the *visual* gap (drawing product at contact
+size, or another route) is deferred as a rendering decision, not a physics one,
+since it must not touch the fill-height result.

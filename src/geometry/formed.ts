@@ -75,6 +75,9 @@ export function roundnessFromFill(opts: {
   const roundCapacity = Math.PI * aRound * aRound * opts.innerLen; // fully-round volume
   if (roundCapacity <= 0) return 0;
   const phi = opts.productVolume / (packing * roundCapacity); // 0…~1+
-  const bulge = 1.2 - 0.6 * Math.max(0, Math.min(1, opts.stiffNorm)); // limp bulges more
+  // A stiff film holds a rounder, deeper section for the same fill; a limp film
+  // collapses flatter and wider. (Empty → phi = 0 → roundness 0 regardless, so
+  // stiffness does nothing pre-fill; it only shapes how the fill inflates.)
+  const bulge = 0.6 + 0.6 * Math.max(0, Math.min(1, opts.stiffNorm));
   return Math.max(0, Math.min(1, phi * bulge));
 }
