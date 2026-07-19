@@ -40,7 +40,7 @@ const SOLVER_ITERS = 16; // ↑ from Rapier's default 4 so angled discs resolve,
 const LENGTH_UNIT = 0.045; // Rapier length scale → contact tolerances match cm-scale product
 const PREDICTION_DIST = 0.02; // ↑ predictive-contact distance so edge contacts are caught early
 const DISC_BORDER = 1.2; // rounded-cylinder bevel (mm): fattens disc edge contacts
-const CONTACT_SKIN = 0.6; // product contact skin (mm): a solid buffer that resists penetration
+const CONTACT_SKIN = 1.4; // product contact skin (mm): a solid buffer that resists penetration
 
 let rapierReady: Promise<void> | null = null;
 /** Initialise the Rapier WASM runtime once. Must resolve before `new FillSim()`. */
@@ -86,7 +86,6 @@ export interface ShellState {
   innerLen: number;
   halfW: number;
   halfD: number;
-  sag: number;
   jawY: number;
   /** Round forming-tube radius (mm). */
   tubeR: number;
@@ -171,13 +170,15 @@ export class FillSim {
   private pieceVolume = 0; // solid volume of one product piece (mm³)
   private formedRoundnessTgt = 0; // roundness at the full target fill (0 flat … 1 round)
 
-  private sag = 0;
-  private sagGain = 1;
 
   private static readonly WALL_T = 4; // radial wall half-thickness (mm)
   private static readonly N_WALL = 30; // ellipse cage segments — no gaps for thin discs
   private static readonly N_FLOOR = 6;
-  private static readonly FLOOR_HALF_T = 30; // thick floor so thin fast product can't tunnel it
+  // Thin floor: a piece pressed into a THICK slab can creep past its midline and
+  // get ejected out the *bottom* (nearest surface flips), poking below the seal.
+  // Thin means the top face is always closest, so the solver always pushes product
+  // back UP; CCD stops fast tunnelling.
+  private static readonly FLOOR_HALF_T = 8;
 
   build(params: FillParams): void {
     this.params = params;
@@ -225,10 +226,13 @@ export class FillSim {
     // Collision envelope = the formed section at the full target fill (the widest
     // the bag will bulge). Rounding trades width for depth, so both are floored at
     // the product footprint so a piece always physically fits.
+    // The depth floor also gives a sparsely-filled (near-lay-flat) bag enough room
+    // for product to spread across it rather than stacking into a tall central
+    // column — the flat sealed base no longer nests pieces low the way the old sag
+    // bowl did. It also widens the forming tube so product feeds freely.
     const prMin = 0.5 * Math.max(params.product.w, params.product.depth);
-    this.usableHalfW = Math.max(sec.halfW, prMin + 4);
-    this.usableHalfD = Math.max(sec.halfD, prMin + 7);
-    this.sagGain = prof.floorSagGain;
+    this.usableHalfW = Math.max(sec.halfW, prMin + 6);
+    this.usableHalfD = Math.max(sec.halfD, prMin + 12);
     this.jawY = prof.innerLen;
 
     // Former stack: hopper funnel → round tube → bag mouth, all concentric with
@@ -267,7 +271,8 @@ export class FillSim {
     const st = clamp01(this.params.stiff / 100);
     const desc = RAPIER.ColliderDesc.cuboid(this.m(hxMM), this.m(hyMM), this.m(hzMM))
       .setRestitution(0.02 + 0.1 * st)
-      .setFriction(0.6);
+      .setFriction(0.6)
+      .setContactSkin(this.m(CONTACT_SKIN)); // firm buffer so the bottom layer can't sink in
     this.world.createCollider(desc, body);
     return { body, restX };
   }
@@ -414,14 +419,18 @@ export class FillSim {
     box(outerX + 5, 4, outerZ + 5, 0, bot, 0); // catch floor
   }
 
-  private floorAt(xMM: number): number {
-    const t = Math.max(-1, Math.min(1, xMM / Math.max(1, this.usableHalfW)));
-    return -this.sag * Math.cos((t * Math.PI) / 2);
+  private floorAt(_xMM: number): number {
+    // Flat sealed base at the seal plane (y = 0). Real product rests on the
+    // flattened bottom weld, not down in a knife-edge sag pocket — a sagging bowl
+    // dropped pieces below the seal plane, where the rendered film pinches, so
+    // they poked out the bottom. The pinch/seal is rendered as geometry BELOW
+    // this plane (visual only); nothing rests there.
+    return 0;
   }
 
   private positionShell(): void {
-    // The ellipse cage is static; only the sagging floor tiles move. Thick tiles:
-    // the top surface sits on the sag curve (centre is FLOOR_HALF_T below).
+    // The ellipse cage is static; only the floor tiles are placed. Flat sealed
+    // base: tile top surface sits at the seal plane (centre is FLOOR_HALF_T below).
     for (const tile of this.floorTiles) {
       tile.body.setNextKinematicTranslation({
         x: this.m(tile.restX),
@@ -440,7 +449,6 @@ export class FillSim {
     this.settled = false;
     this.settleT = 0;
     this.fillLine = 0;
-    this.sag = 0;
     this.status = "ready";
     this.positionShell();
   }
@@ -550,21 +558,9 @@ export class FillSim {
         this.spawn();
       }
     }
-    this.updateShell();
     this.world.step();
     this.updateFillLine();
     this.updateStatus();
-  }
-
-  private updateShell(): void {
-    let resting = 0;
-    for (const b of this.product) {
-      if (this.speed(b) < REST_SPEED && this.appY(b) < this.jawY) resting++;
-    }
-    const load = (resting * this.params.unitWeight) / 50;
-    const sagTarget = Math.min(this.innerLen * 0.1, load * this.sagGain * 1.6);
-    this.sag += (sagTarget - this.sag) * Math.min(1, 3 * FIXED_DT);
-    this.positionShell();
   }
 
   private appY(b: RAPIER.RigidBody): number {
@@ -630,7 +626,6 @@ export class FillSim {
       innerLen: this.innerLen,
       halfW: this.usableHalfW,
       halfD: this.usableHalfD,
-      sag: this.sag,
       jawY: this.jawY,
       tubeR: this.tubeR,
       tubeLen: this.tubeLen,

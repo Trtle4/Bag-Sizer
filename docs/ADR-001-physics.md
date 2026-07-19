@@ -115,3 +115,38 @@ iterations. The rounded convex hull was also tested and, like the sharp prism,
 sank under random orientation — the *rounded analytic cylinder* was clearly best
 on the data. Reported fill height / headspace / packing are now trustworthy from
 the sim directly rather than needing a bulk-packing fallback.
+
+### Bottom-layer penetration — diagnosis and fix
+
+A follow-up review flagged localized interpenetration at the *bottom* of the
+pile that the bulk `packing` metric averaged away. Read the real per-contact
+depths from Rapier's narrow phase (`contactDist < 0` = penetration) and isolated
+the cause before touching anything:
+
+- **Flat floor vs the sagging bowl** (the review's decision test): flattening the
+  floor did *not* help disc-disc penetration (bottom max 12→22 mm), ruling out
+  floor *shape* as the disc-disc cause → solver convergence under stack weight.
+- **Solver iterations barely helped** (mean 1.87→1.73 mm at 2× iters). The
+  effective lever for disc-disc overlap was the **contact skin**: a per-collider
+  solid buffer. Sweeping it, skin **1.4 mm** cut deep (>0.5 mm) disc-disc contacts
+  599→374 and bottom contacts 202→70, landing the settled `packing` at a
+  *physical* ~0.73 (the old 0.6 skin's `packing` = 1.11 was unphysically
+  compressed — the bottom discs were sunk into each other, under-reporting fill
+  height). The skin is applied to the product **and** the floor.
+- A separate defect: two pieces per fill sat *below the seal plane*, poking out
+  the rendered pinch. Not the sag pocket (flattening didn't move them) — they had
+  **sunk into the 60 mm-thick floor slab** and, once past its midline, got
+  ejected out the bottom (nearest-surface flips). Fix: a **thin floor**
+  (`FLOOR_HALF_T` 30→8 mm) so the top face is always the closest surface and the
+  solver always pushes product back up; CCD stops fast tunnelling. Lowest piece
+  went from −20 mm to ~+1 mm. The floor is now a **flat sealed base at the seal
+  plane**; the pinch is rendered as geometry below it (visual only). The
+  load-driven floor **sag** was removed with it.
+- Removing the sag lost its side effect of *nesting* product low, so a
+  sparsely-filled (near-lay-flat) bag stacked into a tall central column and a
+  few pieces backed up over the jaw; the fatter skinned discs also jammed the
+  narrow forming tube of that shallow bag. Both are fixed by raising the
+  collision envelope's minimum depth/width floor (`prMin`+7/+4 → +12/+6), which
+  gives a lightly-filled bag room to spread and widens the forming tube. This
+  floors only the *collision* envelope; the FORMED DEPTH readout still comes from
+  the perimeter model.
