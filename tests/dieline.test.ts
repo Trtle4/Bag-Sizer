@@ -63,10 +63,10 @@ describe("pillow dieline model — hand-checked", () => {
     }
   });
 
-  it("is reachable through the style registry", () => {
+  it("is reachable through the style registry, with all styles enabled", () => {
     expect(getBagStyle("pillow")).toBe(pillow);
-    expect(getBagStyle("gusseted").enabled).toBe(false);
-    expect(getBagStyle("sup").enabled).toBe(false);
+    expect(getBagStyle("gusseted").enabled).toBe(true);
+    expect(getBagStyle("sup").enabled).toBe(true);
   });
 });
 

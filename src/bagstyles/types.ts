@@ -25,12 +25,34 @@ export interface BagParams {
   endSeal: number;
   /** Fin seal strip width (mm). */
   finSeal: number;
+  /**
+   * Gusset depth (mm) — the formed front-to-back depth the gusset opens to.
+   * Side gusset (gusseted) or bottom gusset (SUP). Ignored by the pillow style.
+   * Optional so pillow-only callers (and the test fixtures) need not set it.
+   */
+  gusset?: number;
 }
 
 export interface SimProfileOpts {
   /** Normalised film stiffness in [0, 1]. */
   stiffNorm: number;
 }
+
+/**
+ * How the filled cross-section forms — the physics builds one elliptical wall
+ * cage (halfW × halfD) for every style; only the way that ellipse is sized
+ * differs, so containment is identical across styles.
+ *
+ * - `pillow`: a flat film of fixed circumference `4·flatHalfW` redistributes
+ *   from flat toward round as product fills (perimeter conservation). Depth is
+ *   emergent and bounded.
+ * - `boxed`: a gusset defines the depth directly. The ellipse opens toward
+ *   `halfW × halfD` as it fills; `openFloor` is its minimum openness when nearly
+ *   empty (a side gusset opens readily; a stand-up base needs some product).
+ */
+export type SectionModel =
+  | { kind: "pillow"; flatHalfW: number }
+  | { kind: "boxed"; halfW: number; halfD: number; openFloor: number };
 
 /**
  * 3-D bag shell rest geometry (mm) for the Rapier fill sim.
@@ -52,6 +74,8 @@ export interface SimProfile {
   floorSagGain: number;
   /** Load → outward wall-billow gain (limp bows out more). */
   billowGain: number;
+  /** How the filled cross-section forms (drives the collision ellipse + readout). */
+  section: SectionModel;
 }
 
 /** Cutting-table layer conventions (also the DXF layer names in phase 2). */

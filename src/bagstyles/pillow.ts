@@ -40,6 +40,9 @@ function simProfile(p: BagParams, opts: SimProfileOpts): SimProfile {
     usableHalfD,
     floorSagGain: 2.6 - 2.2 * st,
     billowGain: 0.6 - 0.45 * st,
+    // Perimeter conservation: the flat film (circumference 4·uhw) rounds from
+    // flat toward round as product fills, so depth is emergent and bounded.
+    section: { kind: "pillow", flatHalfW: uhw },
   };
 }
 

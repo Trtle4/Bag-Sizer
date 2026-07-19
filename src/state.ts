@@ -37,6 +37,8 @@ export interface AppState {
   bagL: number;
   endSeal: number;
   finSeal: number;
+  /** Gusset depth (mm) for gusseted (side) / SUP (bottom) styles; ignored by pillow. */
+  gusset: number;
 
   stiff: number;
 
@@ -75,6 +77,7 @@ export const initialState: AppState = {
   bagL: 230,
   endSeal: 10,
   finSeal: 10,
+  gusset: 55,
 
   stiff: 40,
 
