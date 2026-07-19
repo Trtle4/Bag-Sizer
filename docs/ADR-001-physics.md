@@ -83,23 +83,35 @@ lying in a flat scattered layer instead of stacking):
 - **Bottom seal, not a ground plane.** The old infinite reference grid read as a
   floor beyond the bag footprint; it's removed. Product rests on a bag-sized
   sagging floor and the rendered pillow pinches to a flat welded bottom seal.
-- **Disc collider = thin N-gon prism, not an analytic cylinder.** Rapier's
-  cylinder–cylinder contact between coplanar faces is a degenerate single point,
-  so flat discs sank into each other. A convex polytope yields a stable
-  multi-point face manifold, so discs pile in visible layers. Combined with a
-  scaled `lengthUnit` (contact tolerances tuned to cm-scale parts, not the
-  default 1 m), near-flat spawn orientation, and raised solver iterations.
+- **Disc collider = rounded cylinder (bevelled edge).** Chosen from a measured
+  collider/contact study (below), not a guess.
 - **Overfull** now also trips when product backs up above the jaw plane (jammed
   in the throat), not only when the counted fill line crosses it.
 
-### Known limitation — thin rigid discs
+### Disc-stacking study — how the collider was chosen
 
-Very thin rigid discs (e.g. ⌀30×4, a 7.5:1 aspect) remain a hard case for a
-real-time solver: coplanar prism faces still creep together under a tall stack's
-sustained load, so a fully-settled headless run can over-compress (implied
-packing > 1). In the interactive app — where the fixed-timestep budget clamps
-substeps under load, per the performance policy above — the pile renders as a
-believable stack. Thicker discs and non-disc shapes settle cleanly. Eliminating
-the residual creep would need substepping/contact-stiffness work that is out of
-scope for this pass; the structural fixes (containment, formed depth, seal) are
-independent of it.
+Thin rigid discs (⌀30×4, 7.5:1 aspect) are the hard case for a real-time solver.
+An early fix modelled the disc as an N-gon **prism** and spawned it **near-flat**
+so it stacked. That worked only because of the flat constraint — it hid an engine
+weakness rather than fixing it. A matrix (thin discs, random / funnel-fed
+orientation so edge/corner contacts are actually exercised) measured settled
+**packing = solid ÷ (bag cross-section × pile height)**; > 1 means the pile is
+shorter than the product volume allows → interpenetration:
+
+| collider | orientation | packing | notes |
+| --- | --- | --- | --- |
+| N-gon prism | near-flat | ~0.8 | only stacks when forced flat; **towers**/creeps otherwise |
+| N-gon prism | random | **2.9** | collapses — product 3× the pile it should make |
+| analytic cylinder | random | 1.13 | coplanar-face contact is a single point |
+| **rounded cylinder** | random | **1.03–1.09** | stable, spreads, no creep, no flat crutch |
+
+The **rounded-cylinder** edge fattens exactly the edge/corner contact manifold
+that was sinking, so angled discs settle at ~physical packing with a *random*
+(funnel-reoriented) drop — no artificial flat spawn. It holds across thin and
+thick discs (packing 0.96–1.09) with zero escapes and no creep. Shipped with a
+scaled `lengthUnit` (tolerances tuned to cm-scale parts), a widened predictive-
+contact distance, a small per-collider contact skin, and raised solver + CCD
+iterations. The rounded convex hull was also tested and, like the sharp prism,
+sank under random orientation — the *rounded analytic cylinder* was clearly best
+on the data. Reported fill height / headspace / packing are now trustworthy from
+the sim directly rather than needing a bulk-packing fallback.

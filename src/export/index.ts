@@ -114,7 +114,7 @@ function specRows(s: AppState, m: Measurements): [string, string, string][] {
     ["Usable bag volume", has ? fmt1(m.pctUsable) : "—", has ? "%" : ""],
     ["Formed depth", has ? fmt1(m.formedDepth) : "—", has ? "mm" : ""],
     ["Formed roundness", has ? `${Math.round(m.formedRoundness * 100)}` : "—", has ? "%" : ""],
-    ["Fill solidity", has ? `${Math.round(m.reconcile * 100)}` : "—", has ? "% (product/formed vol)" : ""],
+    ["Packing (solid/bag vol)", has ? `${Math.round(m.reconcile * 100)}` : "—", has ? "%" : ""],
   ];
 }
 
@@ -154,7 +154,7 @@ export function buildSpecText(s: AppState, m: Measurements): string {
     `  Bulk density       : ${m.fillLine > 1 ? fmt1(m.bulkDensity * 1000) + " g/cm³" : "—"}`,
     `  Usable bag volume  : ${m.fillLine > 1 ? fmt1(m.pctUsable) + " %" : "—"}`,
     `  Formed depth       : ${m.fillLine > 1 ? fmt1(m.formedDepth) + " mm (" + Math.round(m.formedRoundness * 100) + "% round)" : "—"}`,
-    `  Fill solidity      : ${m.fillLine > 1 ? Math.round(m.reconcile * 100) + " % (product ÷ formed vol; rest = voids)" : "—"}`,
+    `  Packing            : ${m.fillLine > 1 ? Math.round(m.reconcile * 100) + " % (product solid ÷ bag internal volume)" : "—"}`,
   ];
   return lines.join("\n");
 }
