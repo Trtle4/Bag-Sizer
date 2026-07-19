@@ -87,8 +87,6 @@ export interface ShellState {
   halfW: number;
   halfD: number;
   jawY: number;
-  /** Round forming-tube radius (mm). */
-  tubeR: number;
   /** Forming-tube length above the jaw plane (mm). */
   tubeLen: number;
 }
@@ -123,7 +121,6 @@ export interface LiveShell {
   bellyHalfD: number;
   fillLine: number;
   roundness: number;
-  tubeR: number;
   tubeLen: number;
 }
 
@@ -153,14 +150,12 @@ export class FillSim {
   private usableHalfW = 0;
   private usableHalfD = 0;
   private jawY = 0;
-  private spawnY = 0;
-  private tubeR = 20; // round former radius (mm)
-  private tubeLen = 120; // straight tube length above the jaw (mm)
-  private funnelR = 40; // hopper funnel mouth radius (mm)
-  private funnelH = 40; // hopper funnel height (mm)
-  private spawnRadius = 0; // radius of the spawn disc above the funnel mouth (mm)
-  private dropSpeed = 1; // downward launch speed from drop height (m/s)
-  private wallBot = 0; // wall foot (mm, below the floor sag)
+  private spawnY = 0; // release height (mm) = jawY + dropH → real free-fall
+  private dropH = 0; // drop height (mm)
+  private tubeLen = 120; // forming-tube length above the jaw plane (mm) = spawnY − jawY
+  private spawnHalfW = 0; // half-width of the spread spawn footprint (mm)
+  private spawnHalfD = 0; // half-depth of the spread spawn footprint (mm)
+  private wallBot = 0; // wall foot (mm, below the floor)
   private productRadius = 6;
 
   // Formed cross-section (perimeter conservation) — the film is cut flat, so its
@@ -235,24 +230,23 @@ export class FillSim {
     this.usableHalfD = Math.max(sec.halfD, prMin + 12);
     this.jawY = prof.innerLen;
 
-    // Former stack: hopper funnel → round tube → bag mouth, all concentric with
-    // the bag opening. The round tube is sized wide enough to pass the product
-    // (guide, don't meter — no deliberate bridging/jamming); the funnel catches
-    // the drop spread and centres every piece into the tube.
-    const minHalf = Math.min(this.usableHalfW, this.usableHalfD);
+    // Forming tube = the bag-mouth ellipse extended straight up above the jaw (a
+    // real VFFS forming tube is sized to the bag, not a narrow throat). Product is
+    // released across the full mouth and falls spread onto the base rather than
+    // funnelled onto a centre column; the same elliptical wall contains it the
+    // whole way down from the release height, so nothing scatters outside.
     const pr = 0.5 * Math.max(params.product.w, params.product.depth); // footprint radius
-    // Wide enough to pass the product freely (guide, don't meter/bridge).
-    this.tubeR = clamp(Math.max(0.9 * minHalf, pr + 8), pr + 6, Math.max(pr + 6, minHalf - 2));
-    this.tubeLen = clamp(params.dropH * 0.08, 50, 140);
-    this.funnelR = Math.max(1.9 * this.tubeR, this.usableHalfW * 1.0);
-    this.funnelH = this.funnelR * 0.9;
-    const funnelTop = this.jawY + this.tubeLen + this.funnelH;
-    // Spawn ABOVE the funnel mouth, well inside the rim; the walls centre pieces.
-    this.spawnRadius = this.funnelR * 0.5;
-    this.spawnY = funnelTop + 40;
-    // Drop height becomes downward launch speed (capped); CCD stops tunnelling.
-    this.dropSpeed = Math.min(5.0, Math.sqrt(2 * 9.81 * Math.max(0, params.dropH) * MM));
     this.productRadius = Math.max(3, 0.5 * Math.max(params.product.w, params.product.h, params.product.depth));
+    // Release AT REST at the true drop height above the mouth: free-fall then
+    // gives the physically-correct impact speed √(2·g·dropH) — no capped launch
+    // velocity. A minimum keeps a short tube for a near-zero drop.
+    this.dropH = Math.max(0, params.dropH);
+    this.spawnY = this.jawY + Math.max(this.dropH, 60);
+    this.tubeLen = this.spawnY - this.jawY;
+    // Spread the release across the mouth (a small clearance inside the wall, and
+    // inset by the product footprint so a piece starts fully inside the ellipse).
+    this.spawnHalfW = Math.max(2, this.usableHalfW - pr - 3);
+    this.spawnHalfD = Math.max(2, this.usableHalfD - pr - 3);
 
     this.product = [];
     this.floorTiles = [];
@@ -283,9 +277,11 @@ export class FillSim {
     this.wallBot = -(this.innerLen * 0.1 + 25);
     // Elliptical film wall: a ring of thin static segments lying ON the formed
     // cross-section, so the collider MATCHES the visible pillow profile at every
-    // height with no corner gaps. Product settles inside the same ellipse the film
+    // height with no corner gaps. It extends above the jaw to the release height as
+    // the FORMING TUBE, so product is contained from the drop all the way down —
+    // nothing scatters outside. Product settles inside the same ellipse the film
     // renders, so containment and the volume reconciliation are exact.
-    this.buildEllipseCage(this.usableHalfW, this.usableHalfD, this.wallBot, this.innerLen);
+    this.buildEllipseCage(this.usableHalfW, this.usableHalfD, this.wallBot, this.spawnY + this.productRadius + 10);
 
     // Floor: a row of thick sagging tiles across x, covering the full ellipse
     // bounding box in both axes so nothing can rest past the bag footprint.
@@ -348,66 +344,12 @@ export class FillSim {
         b,
       );
     };
-    // Round forming tube / containment guide: a ring of static wall segments
-    // forming a cylinder from the bag mouth (outlet, y=jawY) up to jawY+tubeLen.
-    // It sits concentric inside the bag opening and funnels every dropped piece
-    // straight into the throat, whatever the drop height.
-    const N = 22;
-    const RAD_T = 4; // radial wall half-thickness (mm) — thin product can't tunnel
-    const tubeBot = this.jawY - 4; // start just inside the mouth
-    const tubeTop = this.jawY + this.tubeLen;
-    {
-      const hy = (tubeTop - tubeBot) / 2;
-      const cy = (tubeBot + tubeTop) / 2;
-      // Overlap segments generously so there are no gaps for thin discs to slip.
-      const segHalf = ((Math.PI * this.tubeR) / N) * 1.6;
-      for (let i = 0; i < N; i++) {
-        const ang = (i / N) * Math.PI * 2;
-        const b = fixed();
-        const phi = Math.PI / 2 - ang; // orient local +z radially outward
-        b.setTranslation({ x: this.m(Math.cos(ang) * this.tubeR), y: this.m(cy), z: this.m(Math.sin(ang) * this.tubeR) }, false);
-        b.setRotation({ x: 0, y: Math.sin(phi / 2), z: 0, w: Math.cos(phi / 2) }, false);
-        this.world.createCollider(
-          RAPIER.ColliderDesc.cuboid(this.m(segHalf), this.m(hy), this.m(RAD_T)).setFriction(0.4),
-          b,
-        );
-      }
-    }
-
-    // Hopper funnel: a cone of tilted wall segments, tubeR (bottom) → funnelR
-    // (top), catching the drop spread and guiding pieces down into the tube.
-    {
-      const funBot = tubeTop;
-      const funTop = tubeTop + this.funnelH;
-      const rm = (this.tubeR + this.funnelR) / 2;
-      const cy = (funBot + funTop) / 2;
-      const slant = Math.hypot(this.funnelR - this.tubeR, this.funnelH);
-      const beta = Math.atan2(this.funnelR - this.tubeR, this.funnelH); // tilt from vertical
-      const cb = Math.cos(beta);
-      const sb = Math.sin(beta);
-      // Segment width based on the WIDEST radius (+ overlap) so the top can't gap.
-      const segHalf = ((Math.PI * this.funnelR) / N) * 1.6;
-      for (let i = 0; i < N; i++) {
-        const ang = (i / N) * Math.PI * 2;
-        const ca = Math.cos(ang);
-        const sa = Math.sin(ang);
-        // Local axes in world: x = tangential, y = slant (up+out), z = radial normal.
-        const X = { x: sa, y: 0, z: -ca }; // -tangential (keeps right-handed)
-        const Y = { x: ca * sb, y: cb, z: sa * sb };
-        const Z = { x: ca * cb, y: -sb, z: sa * cb };
-        const b = fixed();
-        b.setTranslation({ x: this.m(ca * rm), y: this.m(cy), z: this.m(sa * rm) }, false);
-        b.setRotation(basisToQuat(X, Y, Z), false);
-        this.world.createCollider(
-          RAPIER.ColliderDesc.cuboid(this.m(segHalf), this.m(slant / 2), this.m(RAD_T)).setFriction(0.3).setRestitution(0.02),
-          b,
-        );
-      }
-    }
-
-    // Outer containment (backstop) + catch floor below the seal.
-    const outerX = Math.max(this.params.bag.bagW / 2, this.funnelR) + 25;
-    const outerZ = Math.max(this.usableHalfD, this.funnelR) + 25;
+    // The forming tube is the elliptical cage (buildShell), so there is no
+    // separate round tube or hopper funnel here — product is released already
+    // inside the mouth. A generous outer backstop + catch floor stay as a safety
+    // net in case a piece is ever nudged past the wall.
+    const outerX = Math.max(this.params.bag.bagW / 2, this.usableHalfW) + 25;
+    const outerZ = this.usableHalfD + 25;
     const bot = -Math.max(40, this.params.bag.endSeal + 30);
     const top = this.spawnY + 40;
     const oh = (top - bot) / 2;
@@ -483,23 +425,24 @@ export class FillSim {
   private spawn(): void {
     const p = this.params.product;
     const st = clamp01(this.params.stiff / 100);
-    // Uniform point in the outlet disc (inside the tube throat).
-    const rr = this.spawnRadius * Math.sqrt(this.rng.next());
+    // Release across the full bag mouth (elliptical footprint) so product drops
+    // spread across the width and lands spread on the base, not on a centre column.
+    const k = Math.sqrt(this.rng.next());
     const th = this.rng.next() * Math.PI * 2;
-    const x = rr * Math.cos(th);
-    const z = rr * Math.sin(th);
-    // Product enters with a random orientation and is reoriented only by the
-    // funnel + tube on the way down — no artificial flat spawn. The rounded-
-    // cylinder collider settles the resulting angled contacts cleanly.
+    const x = this.spawnHalfW * k * Math.cos(th);
+    const z = this.spawnHalfD * k * Math.sin(th);
+    // Random orientation; the rounded-cylinder collider settles angled contacts.
     const orient = this.randomQuat();
     const rbDesc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(this.m(x), this.m(this.spawnY), this.m(z))
       .setRotation(orient)
-      // Launch downward at the drop-height velocity, with a little lateral scatter.
-      .setLinvel(this.rng.spread(0.2), -this.dropSpeed, this.rng.spread(0.2))
-      .setLinearDamping(0.05 + 0.5 * (1 - st))
+      // Released AT REST (vy = 0) → real free-fall under gravity, so the impact
+      // speed is √(2·g·dropH), not a capped launch velocity. A little lateral
+      // scatter only. Damping is minimal so the fall isn't slowed like air drag;
+      // CCD (not a speed cap) stops any tunnelling.
+      .setLinvel(this.rng.spread(0.1), 0, this.rng.spread(0.1))
+      .setLinearDamping(0.02)
       .setAngularDamping(0.3 + 0.6 * (1 - st))
-      // Continuous collision so a fast piece can't tunnel the thin floor/walls.
       .setCcdEnabled(true);
     const rb = this.world.createRigidBody(rbDesc);
 
@@ -627,7 +570,6 @@ export class FillSim {
       halfW: this.usableHalfW,
       halfD: this.usableHalfD,
       jawY: this.jawY,
-      tubeR: this.tubeR,
       tubeLen: this.tubeLen,
     };
   }
@@ -704,7 +646,6 @@ export class FillSim {
       bellyHalfD: f.halfD,
       fillLine: this.fillLine,
       roundness: f.roundness,
-      tubeR: this.tubeR,
       tubeLen: this.tubeLen,
     };
   }
@@ -718,10 +659,7 @@ export class FillSim {
       endSeal: this.params.bag.endSeal,
       jawY: this.jawY,
       spawnY: this.spawnY,
-      tubeR: this.tubeR,
       tubeLen: this.tubeLen,
-      funnelR: this.funnelR,
-      funnelH: this.funnelH,
       productRadius: this.productRadius,
     };
   }
@@ -759,30 +697,4 @@ function polygonArea(pts: { x: number; y: number }[]): number {
 
 function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v));
-}
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.min(hi, Math.max(lo, v));
-}
-type V3 = { x: number; y: number; z: number };
-type Quat = { x: number; y: number; z: number; w: number };
-/** Rotation quaternion from an orthonormal basis given as world-space columns X,Y,Z. */
-function basisToQuat(X: V3, Y: V3, Z: V3): Quat {
-  const m00 = X.x, m10 = X.y, m20 = X.z;
-  const m01 = Y.x, m11 = Y.y, m21 = Y.z;
-  const m02 = Z.x, m12 = Z.y, m22 = Z.z;
-  const tr = m00 + m11 + m22;
-  if (tr > 0) {
-    const s = Math.sqrt(tr + 1) * 2;
-    return { w: 0.25 * s, x: (m21 - m12) / s, y: (m02 - m20) / s, z: (m10 - m01) / s };
-  }
-  if (m00 > m11 && m00 > m22) {
-    const s = Math.sqrt(1 + m00 - m11 - m22) * 2;
-    return { w: (m21 - m12) / s, x: 0.25 * s, y: (m01 + m10) / s, z: (m02 + m20) / s };
-  }
-  if (m11 > m22) {
-    const s = Math.sqrt(1 + m11 - m00 - m22) * 2;
-    return { w: (m02 - m20) / s, x: (m01 + m10) / s, y: 0.25 * s, z: (m12 + m21) / s };
-  }
-  const s = Math.sqrt(1 + m22 - m00 - m11) * 2;
-  return { w: (m10 - m01) / s, x: (m02 + m20) / s, y: (m12 + m21) / s, z: 0.25 * s };
 }

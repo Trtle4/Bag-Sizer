@@ -150,3 +150,45 @@ the cause before touching anything:
   gives a lightly-filled bag room to spread and widens the forming tube. This
   floors only the *collision* envelope; the FORMED DEPTH readout still comes from
   the perimeter model.
+
+### Real-world calibration — full-width forming tube + honest free-fall (2026-07-19)
+
+Two calibration items against a real VFFS machine:
+
+- **Forming tube ≈ bag width.** On a real VFFS the forming tube is sized close
+  to the bag width, so product drops across the *full* width and lands spread
+  across the base — it is not funnelled onto a centre column. The narrow round
+  tube + cone funnel is removed. The forming tube is now the **elliptical wall
+  cage extended straight up** from the jaw to the release height — i.e. the
+  visible film mouth continued upward — and product is **spawned spread across
+  that whole mouth** (`x = spawnHalfW·√u·cosθ, z = spawnHalfD·√u·sinθ`, a
+  uniform-area disc across the elliptical section, inset a product-radius from
+  the wall). Because the tube *is* the bag mouth, widening it cannot reintroduce
+  escapes: every piece is released inside the collision cage and stays inside it.
+  Verified — **150/150 inside** (0 escaping in x, 0 in z, 0 below the seal) on
+  thin ⌀30×4 discs, **90/90** on thick ⌀30×12, and still 150/150 at drop heights
+  of 300 / 800 / 1500 mm. Product now lands spread (bottom footprint ~85 mm
+  across a ~104 mm formed width) instead of piling on one point, which also
+  relieves the bottom-stacking contention. Front + ¾ ortho views confirm the
+  wide tube, the spread landing, and clean containment.
+- **Real gravity, no velocity cap.** The world runs in **metres** — every length
+  is scaled mm→m at the physics boundary (`MM = 0.001`), so g = 9.81 m/s² is
+  physically correct; there is no hidden scale factor on the dynamics.
+  `integrationParameters.lengthUnit = 0.045` scales *only* the contact/rest
+  tolerances (tuned for cm-scale parts), **not** gravity or the integrator, so
+  1 world-unit = 1 m stands. The earlier anti-tunnelling trick — capping the
+  launch speed at `min(5, √(2gh))` — is **removed**; pieces now **spawn at rest**
+  at the release height and free-fall under gravity, with tunnelling handled the
+  right way (CCD + fixed 1/120 s substeps), not by slowing the fall. A dedicated
+  test (`tests/freefall.test.ts`) drops a piece and measures its speed at the jaw
+  plane against √(2gh): a 2.00 m drop (which the old 5 m/s cap would have
+  clipped) measured **6.19 m/s vs the 6.26 m/s prediction** (~1 % low, from the
+  small 0.02 residual linear damping), and speed scales as √h across 0.5 m vs
+  2.0 m. Fall speed is now real.
+
+One honest consequence: with real free-fall and near-frictionless drop the pile
+packs a little looser than the old capped/damped drop, so reported fill height
+rises slightly (e.g. 150 thin discs ≈ 140 mm fill / ~70 mm headspace vs the
+earlier ~102 mm). That earlier number was compressed by the very
+interpenetration the prior round fixed; the higher number is the physically
+honest one.

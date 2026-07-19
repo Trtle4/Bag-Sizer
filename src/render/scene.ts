@@ -172,10 +172,7 @@ export class SceneRenderer {
     flatHalfW: number;
     endSeal: number;
     jawY: number;
-    tubeR: number;
     tubeLen: number;
-    funnelR: number;
-    funnelH: number;
   }): void {
     this.setFormer(env);
     // Start from the empty (near lay-flat) formed shell; draw() bulges it live.
@@ -188,7 +185,6 @@ export class SceneRenderer {
       bellyHalfD: 0.5,
       fillLine: 0,
       roundness: 0,
-      tubeR: env.tubeR,
       tubeLen: env.tubeLen,
     }, 0, 0, 0);
     // Aim at the bag body (not the tall former) and keep the camera fairly level
@@ -196,7 +192,7 @@ export class SceneRenderer {
     // the back-bottom read as if it were below the transparent front film.
     const cy = env.innerLen * 0.45;
     this.target.set(0, cy, 0);
-    const reach = Math.max(env.usableHalfW * 2, env.funnelR * 2, env.innerLen) * 1.5 + 160;
+    const reach = Math.max(env.usableHalfW * 2, env.innerLen) * 1.5 + 160;
     this.persp.position.set(reach * 0.7, cy + env.innerLen * 0.28, reach * 0.72);
     this.controls.target.copy(this.target);
     this.setCamera(this.mode, env);
@@ -317,26 +313,24 @@ export class SceneRenderer {
     this.seal.position.set(0, -shell.endSeal / 2, 0);
   }
 
-  /** Rebuild the former (tube + hopper funnel) geometry for a new bag. */
+  /**
+   * The forming tube is the bag-mouth ellipse extended straight up above the jaw
+   * to the release height — sized to the bag, not a narrow throat — so product is
+   * shown dropping across the full width. Rendered by scaling the unit cylinder
+   * to (usableHalfW × tubeLen × usableHalfD). No hopper funnel.
+   */
   private setFormer(cfg: {
     jawY: number;
-    tubeR: number;
     tubeLen: number;
-    funnelR: number;
-    funnelH: number;
+    usableHalfW: number;
+    usableHalfD: number;
   }): void {
-    this.tube.scale.set(cfg.tubeR, cfg.tubeLen, cfg.tubeR);
+    this.tube.scale.set(cfg.usableHalfW, cfg.tubeLen, cfg.usableHalfD);
     this.tube.position.set(0, cfg.jawY + cfg.tubeLen / 2, 0);
     this.tubeEdges.scale.copy(this.tube.scale);
     this.tubeEdges.position.copy(this.tube.position);
-
-    const fy = cfg.jawY + cfg.tubeLen + cfg.funnelH / 2;
-    this.funnel.geometry.dispose();
-    this.funnel.geometry = new THREE.CylinderGeometry(cfg.funnelR, cfg.tubeR, cfg.funnelH, 40, 1, true);
-    this.funnel.position.set(0, fy, 0);
-    (this.funnelEdges.geometry as THREE.BufferGeometry).dispose();
-    this.funnelEdges.geometry = new THREE.EdgesGeometry(this.funnel.geometry);
-    this.funnelEdges.position.set(0, fy, 0);
+    this.funnel.visible = false;
+    this.funnelEdges.visible = false;
   }
 
   dispose(): void {
