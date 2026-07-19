@@ -57,7 +57,7 @@ let lastMeasure: Measurements = {
 
 // ---------- param mapping ----------
 function bagParams(s: AppState): BagParams {
-  return { bagW: s.bagW, bagL: s.bagL, endSeal: s.endSeal, finSeal: s.finSeal };
+  return { bagW: s.bagW, bagL: s.bagL, endSeal: s.endSeal, finSeal: s.finSeal, gusset: s.gusset };
 }
 
 function fillParams(s: AppState, seed: number): FillParams {
@@ -120,7 +120,12 @@ bindSeg("segMode", "mode", () => {
   $("fCount").style.display = s.mode === "count" ? "" : "none";
   $("fWeight").style.display = s.mode === "weight" ? "" : "none";
 });
-bindSeg("segStyle", "style");
+function syncStyleFields(): void {
+  const s = store.get();
+  // Gusset depth only applies to the gusset-bearing styles.
+  $("fGusset").style.display = s.style === "pillow" ? "none" : "";
+}
+bindSeg("segStyle", "style", syncStyleFields);
 
 // ---------- numeric inputs ----------
 const numFields: [string, keyof AppState][] = [
@@ -137,6 +142,7 @@ const numFields: [string, keyof AppState][] = [
   ["bagL", "bagL"],
   ["endSeal", "endSeal"],
   ["finSeal", "finSeal"],
+  ["gusset", "gusset"],
   ["minHeadspace", "minHeadspace"],
   ["jawClearance", "jawClearance"],
 ];
@@ -503,6 +509,7 @@ function frame(now: number): void {
     if (store.get().camera !== "iso") renderer.setCamera(store.get().camera, sim.envelope);
   }).observe($("sim3d"));
   rebuild();
+  syncStyleFields();
   setCamera(store.get().camera);
   updateReadouts();
   advisories();

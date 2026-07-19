@@ -109,8 +109,8 @@
           <label>Style</label>
           <div class="seg" id="segStyle">
             <button data-v="pillow" class="on">Pillow</button>
-            <button data-v="gusseted" disabled title="Coming soon">Gusseted</button>
-            <button data-v="sup" disabled title="Coming soon">SUP</button>
+            <button data-v="gusseted">Gusseted</button>
+            <button data-v="sup">SUP</button>
           </div>
         </div>
         <div class="row2">
@@ -120,6 +120,9 @@
         <div class="row2">
           <div class="field"><label>End seal</label><div class="in"><input id="endSeal" value="10" inputmode="decimal"/><span class="unit">mm</span></div></div>
           <div class="field"><label>Fin seal</label><div class="in"><input id="finSeal" value="10" inputmode="decimal"/><span class="unit">mm</span></div></div>
+        </div>
+        <div class="row2" id="fGusset" style="display:none">
+          <div class="field"><label>Gusset depth</label><div class="in"><input id="gusset" value="55" inputmode="decimal"/><span class="unit">mm</span></div></div>
         </div>
         <div id="advisories"></div>
       </section>

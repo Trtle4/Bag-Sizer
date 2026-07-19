@@ -27,7 +27,7 @@ import { Rng } from "./rng.js";
 import { simplifyHull } from "../geometry/hull.js";
 import { headspace as headspaceOf } from "../geometry/index.js";
 import { formedSection, roundnessFromFill } from "../geometry/formed.js";
-import type { BagParams, BagStyle } from "../bagstyles/types.js";
+import type { BagParams, BagStyle, SectionModel } from "../bagstyles/types.js";
 
 const MM = 0.001; // mm → m
 const M = 1000; // m → mm
@@ -186,7 +186,9 @@ export class FillSim {
   // redistributes flat → round, giving a bounded formed depth.
   private flatHalfW = 0; // conserved lay-flat half-width (mm), C = 4·flatHalfW
   private pieceVolume = 0; // solid volume of one product piece (mm³)
-  private formedRoundnessTgt = 0; // roundness at the full target fill (0 flat … 1 round)
+  // How the filled cross-section forms — the style decides (pillow rounds from a
+  // flat film; gusset styles hold a defined depth). Same elliptical cage either way.
+  private section: SectionModel = { kind: "pillow", flatHalfW: 0 };
 
 
   private static readonly WALL_T = 4; // radial wall half-thickness (mm)
@@ -230,21 +232,15 @@ export class FillSim {
     const prof = params.style.simProfile(params.bag, { stiffNorm: st });
     this.innerLen = prof.innerLen;
 
-    // Formed cross-section by perimeter conservation. The lay-flat film width is
-    // fixed (usableHalfW is half of it); the settled product volume drives how
-    // much of that fixed perimeter rounds out into depth. Empty → lay-flat,
-    // packed toward the fully-round capacity → round. Limp film bulges more.
-    this.flatHalfW = prof.usableHalfW;
+    // Filled cross-section — the style decides how it forms (pillow: perimeter
+    // conservation of a flat film; gusset styles: a defined depth). Either way it
+    // resolves to one elliptical envelope (halfW × halfD), so the collision cage
+    // and containment below are style-agnostic.
+    this.section = prof.section;
+    this.flatHalfW = prof.section.kind === "pillow" ? prof.section.flatHalfW : prof.usableHalfW;
     this.pieceVolume = pieceVolumeOf(params.product);
     const targetVolume = Math.max(0, params.count) * this.pieceVolume;
-    this.formedRoundnessTgt = roundnessFromFill({
-      productVolume: targetVolume,
-      flatHalfW: this.flatHalfW,
-      innerLen: this.innerLen,
-      stiffNorm: st,
-      packing: PACKING,
-    });
-    const sec = formedSection(this.flatHalfW, this.formedRoundnessTgt);
+    const sec = this.formedFor(targetVolume);
 
     // Collision envelope = the formed section at the full target fill (the widest
     // the bag will bulge). Rounding trades width for depth, so both are floored at
@@ -603,22 +599,38 @@ export class FillSim {
   }
 
   /**
-   * Live formed cross-section from the *settled* product volume. Empty → lay-flat;
-   * as the pile grows, the fixed film perimeter rounds out into depth. This is what
-   * the renderer bulges to, and what FORMED DEPTH reports.
+   * Formed cross-section (halfW × halfD, mm) for a given settled product volume,
+   * per the current style. Pillow: a fixed film perimeter rounds flat → round as
+   * the pile grows. Boxed (gusset/SUP): a defined depth that opens from `openFloor`
+   * toward its full gusset depth as it fills. This one function drives the collision
+   * cage (at target fill), the rendered belly, and the FORMED DEPTH readout, so they
+   * agree by construction.
    */
-  private liveFormed(restingCount: number): { halfW: number; halfD: number; roundness: number } {
+  private formedFor(volume: number): { halfW: number; halfD: number; roundness: number } {
     const st = clamp01(this.params.stiff / 100);
-    const settledVol = restingCount * this.pieceVolume;
-    const roundness = roundnessFromFill({
-      productVolume: settledVol,
-      flatHalfW: this.flatHalfW,
-      innerLen: this.innerLen,
-      stiffNorm: st,
-      packing: PACKING,
-    });
-    const sec = formedSection(this.flatHalfW, roundness);
-    return { halfW: sec.halfW, halfD: sec.halfD, roundness };
+    if (this.section.kind === "pillow") {
+      const roundness = roundnessFromFill({
+        productVolume: volume,
+        flatHalfW: this.section.flatHalfW,
+        innerLen: this.innerLen,
+        stiffNorm: st,
+        packing: PACKING,
+      });
+      const sec = formedSection(this.section.flatHalfW, roundness);
+      return { halfW: sec.halfW, halfD: sec.halfD, roundness };
+    }
+    // Boxed gusset: width is fixed; depth opens toward the gusset depth with fill.
+    const { halfW, halfD, openFloor } = this.section;
+    const capacity = PACKING * Math.PI * halfW * halfD * this.innerLen;
+    const frac = capacity > 0 ? clamp01(volume / capacity) : 0;
+    const open = openFloor + (1 - openFloor) * frac;
+    const d = Math.max(0.5, halfD * open);
+    return { halfW, halfD: d, roundness: d / halfW };
+  }
+
+  /** Live formed cross-section from the current *settled* product volume. */
+  private liveFormed(restingCount: number): { halfW: number; halfD: number; roundness: number } {
+    return this.formedFor(restingCount * this.pieceVolume);
   }
 
   measurements(): Measurements {
