@@ -34,6 +34,7 @@ const M = 1000; // m → mm
 export const FIXED_DT = 1 / 120; // fixed physics substep (s)
 const REST_SPEED = 0.07; // m/s below which a piece is "at rest"
 const SETTLE_AVG = 0.06; // m/s mean speed for settle detection (tolerant of slow prism creep)
+const CALM_SPEED = 0.2; // m/s mean speed under which the pile is "calm" (not free-falling) → timeout-settle
 const HULL_VERTS = 8; // silhouette verts before extrusion → ≤16 in 3-D
 const PACKING = 0.6; // bulk packing fraction of a settled pile (void-corrected)
 const LENGTH_UNIT = 0.045; // Rapier length scale → contact tolerances match cm-scale product
@@ -94,6 +95,14 @@ export interface FillParams {
   dropH: number;
   stiff: number;
   seed: number;
+  /**
+   * How product enters the bag:
+   * - `trickle` (default): sequential feed through the tube, one piece every
+   *   0.13 s — the current behaviour.
+   * - `batch`: the whole charge is released at once from a pre-spaced,
+   *   overlap-free cloud above the mouth (a combination-scale dump).
+   */
+  release?: "trickle" | "batch";
 }
 
 export type SimStatus = "ready" | "filling" | "settled" | "overfull";
@@ -164,10 +173,15 @@ export class FillSim {
   private spawnTimer = 0;
   private running = false;
   private settled = false;
-  private settleT = 0;
-  private emptyT = 0; // time since the last piece spawned (s) — settle-timeout fallback
+  private settleT = 0; // time the pile has been quiet (avg < SETTLE_AVG)
+  private calmT = 0; // time the pile has been calm (avg < CALM_SPEED) — settle-timeout fallback
   private fillLine = 0;
   private status: SimStatus = "ready";
+
+  // Release: sequential feed vs a one-shot batch dump from a pre-spaced cloud.
+  private releaseMode: "trickle" | "batch" = "trickle";
+  private batchCloud: { x: number; y: number; z: number }[] = [];
+  private releaseTop = 0; // top of the release column (mm) — cage/tube reach up to here
 
   // geometry cache (mm)
   private innerLen = 0;
@@ -267,17 +281,67 @@ export class FillSim {
     // velocity. A minimum keeps a short tube for a near-zero drop.
     this.dropH = Math.max(0, params.dropH);
     this.spawnY = this.jawY + Math.max(this.dropH, 60);
-    this.tubeLen = this.spawnY - this.jawY;
     // Spread the release across the mouth (a small clearance inside the wall, and
     // inset by the product footprint so a piece starts fully inside the ellipse).
     this.spawnHalfW = Math.max(2, this.usableHalfW - pr - 3);
     this.spawnHalfD = Math.max(2, this.usableHalfD - pr - 3);
+
+    // Release mode. `batch` pre-lays the whole charge as an overlap-free cloud
+    // above the mouth; the cage/tube must reach up over the top of that cloud so
+    // it is contained the whole way down. `trickle` releases from a single plane.
+    this.releaseMode = params.release === "batch" ? "batch" : "trickle";
+    this.batchCloud = this.releaseMode === "batch" ? this.computeBatchCloud(Math.max(0, params.count)) : [];
+    this.releaseTop = this.batchCloud.reduce((m, p) => Math.max(m, p.y), this.spawnY);
+    // The rendered forming tube stays a sane height above the jaw; a tall batch
+    // cloud rains in from above it. The physics cage/backstop still reach up to
+    // releaseTop (below) so the whole cloud is contained on the way down.
+    this.tubeLen = this.spawnY - this.jawY;
 
     this.product = [];
     this.floorTiles = [];
     this.buildShell();
     this.buildStatic();
     this.resetRun();
+  }
+
+  /**
+   * Lay out the whole charge as a pre-spaced cloud above the mouth so a batch
+   * release starts with NO piece overlapping another. Pieces sit on a 3-D grid
+   * within the release ellipse; the cell size is the piece's bounding-sphere
+   * diameter plus clearance, so any random orientation still clears its
+   * neighbours. Rows stack upward from the base release height. Deterministic
+   * (pure grid) — orientation/jitter is applied per piece at spawn.
+   */
+  private computeBatchCloud(count: number): { x: number; y: number; z: number }[] {
+    const p = this.params.product;
+    // Bounding-sphere radius: the farthest surface point from the centre, so the
+    // spacing is overlap-free at ANY orientation.
+    const sr = p.round
+      ? Math.hypot(p.w / 2, p.h / 2) // cylinder rim point
+      : Math.hypot(p.w / 2, p.h / 2, p.depth / 2); // box corner
+    const cell = 2 * sr + 5; // + clearance
+    // Centre limits so a piece's sphere fits inside the wall.
+    const bhw = Math.max(cell / 2, this.usableHalfW - sr);
+    const bhd = Math.max(cell / 2, this.usableHalfD - sr);
+    const cols: { x: number; z: number }[] = [];
+    const nx = Math.max(1, Math.floor((2 * bhw) / cell) + 1);
+    const nz = Math.max(1, Math.floor((2 * bhd) / cell) + 1);
+    for (let iz = 0; iz < nz; iz++) {
+      for (let ix = 0; ix < nx; ix++) {
+        const x = (ix - (nx - 1) / 2) * cell;
+        const z = (iz - (nz - 1) / 2) * cell;
+        if ((x / bhw) ** 2 + (z / bhd) ** 2 <= 1.0001) cols.push({ x, z });
+      }
+    }
+    if (cols.length === 0) cols.push({ x: 0, z: 0 });
+    const out: { x: number; y: number; z: number }[] = [];
+    const base = this.spawnY + sr; // first row a sphere-radius above the release plane
+    for (let i = 0; i < count; i++) {
+      const c = cols[i % cols.length];
+      const layer = Math.floor(i / cols.length);
+      out.push({ x: c.x, y: base + layer * cell, z: c.z });
+    }
+    return out;
   }
 
   // ---- mm ⇄ m ----
@@ -306,7 +370,7 @@ export class FillSim {
     // the FORMING TUBE, so product is contained from the drop all the way down —
     // nothing scatters outside. Product settles inside the same ellipse the film
     // renders, so containment and the volume reconciliation are exact.
-    this.buildEllipseCage(this.usableHalfW, this.usableHalfD, this.wallBot, this.spawnY + this.productRadius + 10);
+    this.buildEllipseCage(this.usableHalfW, this.usableHalfD, this.wallBot, this.releaseTop + this.productRadius + 10);
 
     // Floor: a row of thick sagging tiles across x, covering the full ellipse
     // bounding box in both axes so nothing can rest past the bag footprint.
@@ -376,7 +440,7 @@ export class FillSim {
     const outerX = Math.max(this.params.bag.bagW / 2, this.usableHalfW) + 25;
     const outerZ = this.usableHalfD + 25;
     const bot = -Math.max(40, this.params.bag.endSeal + 30);
-    const top = this.spawnY + 40;
+    const top = this.releaseTop + 40;
     const oh = (top - bot) / 2;
     const ocy = (top + bot) / 2;
     box(2, oh, outerZ, -outerX, ocy, 0);
@@ -415,7 +479,7 @@ export class FillSim {
     this.running = false;
     this.settled = false;
     this.settleT = 0;
-    this.emptyT = 0;
+    this.calmT = 0;
     this.fillLine = 0;
     this.status = "ready";
     this.positionShell();
@@ -428,9 +492,15 @@ export class FillSim {
 
   start(): void {
     this.reset();
-    this.queue = this.params.count;
     this.running = true;
     this.status = "filling";
+    if (this.releaseMode === "batch") {
+      // Release the whole charge at once from the pre-spaced cloud — no queue.
+      for (const c of this.batchCloud) this.spawnAt(c.x, c.y, c.z);
+      this.queue = 0;
+    } else {
+      this.queue = this.params.count;
+    }
   }
 
   private randomQuat(): { x: number; y: number; z: number; w: number } {
@@ -449,18 +519,21 @@ export class FillSim {
   }
 
   private spawn(): void {
-    const p = this.params.product;
-    const st = clamp01(this.params.stiff / 100);
-    // Release across the full bag mouth (elliptical footprint) so product drops
-    // spread across the width and lands spread on the base, not on a centre column.
+    // Trickle: release across the full bag mouth (elliptical footprint) so product
+    // drops spread across the width and lands spread on the base, not on a column.
     const k = Math.sqrt(this.rng.next());
     const th = this.rng.next() * Math.PI * 2;
-    const x = this.spawnHalfW * k * Math.cos(th);
-    const z = this.spawnHalfD * k * Math.sin(th);
+    this.spawnAt(this.spawnHalfW * k * Math.cos(th), this.spawnY, this.spawnHalfD * k * Math.sin(th));
+  }
+
+  /** Instantiate one piece at (x, y, z) mm, at rest with a random orientation. */
+  private spawnAt(x: number, y: number, z: number): void {
+    const p = this.params.product;
+    const st = clamp01(this.params.stiff / 100);
     // Random orientation; the rounded-cylinder collider settles angled contacts.
     const orient = this.randomQuat();
     const rbDesc = RAPIER.RigidBodyDesc.dynamic()
-      .setTranslation(this.m(x), this.m(this.spawnY), this.m(z))
+      .setTranslation(this.m(x), this.m(y), this.m(z))
       .setRotation(orient)
       // Released AT REST (vy = 0) → real free-fall under gravity, so the impact
       // speed is √(2·g·dropH), not a capped launch velocity. A little lateral
@@ -561,10 +634,15 @@ export class FillSim {
     }
     const avg = n ? Math.sqrt(ke / n) : 0;
     // Overfull two ways: the pile crosses the jaw plane, OR product can't fit and
-    // backs up — pieces come to rest above the jaw (jammed in the throat/tube).
+    // backs up — pieces come to rest jammed in the throat, just above the jaw.
+    // Count only rest pieces in the throat *band* (jaw → release plane); this
+    // excludes the batch cloud (which sits at/above the release plane and is
+    // momentarily at rest the instant it spawns), so a batch dump doesn't read as
+    // instantly overfull.
     let backedUp = 0;
     for (const b of this.product) {
-      if (this.speed(b) < REST_SPEED && this.appY(b) > this.jawY + this.productRadius) backedUp++;
+      const y = this.appY(b);
+      if (this.speed(b) < REST_SPEED && y > this.jawY + this.productRadius && y < this.spawnY) backedUp++;
     }
     const overfull = n > 0 && (this.fillLine > this.innerLen || backedUp >= 3);
     if (overfull) this.status = "overfull";
@@ -573,14 +651,18 @@ export class FillSim {
     else this.status = "ready";
 
     if (this.running && this.queue === 0 && n > 0) {
-      this.emptyT += FIXED_DT;
       if (avg < SETTLE_AVG) this.settleT += FIXED_DT;
       else this.settleT = 0;
-      // Settle when the pile is quiet (thin discs reach this fast) OR when a
-      // stubborn pile has had a couple of seconds to shed its fall energy but
-      // won't cross the absolute velocity line — heavier product jitters at a
-      // higher floor, so an absolute threshold alone can't fit every size.
-      if (this.settleT > 0.6 || this.emptyT > 2.5) {
+      // The calm timer only advances once the pile is no longer free-falling
+      // (avg < CALM_SPEED); it must NOT count while a batch cloud is still in the
+      // air, or a stubborn-pile timeout would freeze pieces mid-drop.
+      if (avg < CALM_SPEED) this.calmT += FIXED_DT;
+      else this.calmT = 0;
+      // Settle when the pile is quiet (thin discs reach this fast) OR when a calm
+      // but stubborn pile has had a couple of seconds and won't cross the absolute
+      // velocity line — heavier product jitters at a higher floor, so an absolute
+      // threshold alone can't fit every size.
+      if (this.settleT > 0.6 || this.calmT > 2.5) {
         this.running = false;
         this.settled = true;
         this.status = overfull ? "overfull" : "settled";
@@ -594,7 +676,7 @@ export class FillSim {
       }
     } else {
       this.settleT = 0;
-      if (this.queue > 0) this.emptyT = 0;
+      this.calmT = 0;
     }
   }
 

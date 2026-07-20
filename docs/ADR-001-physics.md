@@ -328,3 +328,39 @@ the rotational rocking without touching the vertical fall speed. `settle.test.ts
 asserts a dropped pile reaches every-body-asleep / zero velocity with a fill that
 then holds still, for both a thin and a thick pile. Anti-overlap and fill numbers
 from the previous rounds are unchanged.
+
+### Batch (bulk-dump) release alongside the sequential feed (2026-07-19)
+
+Product can now enter two ways (`FillParams.release`, a UI toggle):
+
+- **`trickle`** (default) — the sequential feed, one piece every 0.13 s.
+- **`batch`** — the whole charge is released at once, as a combination-scale dump.
+
+The batch **must not start pieces inside each other** (that would re-create the
+interpenetration/jitter the prior rounds fixed). So the charge is pre-laid as an
+**overlap-free cloud** above the mouth (`computeBatchCloud`): a 3-D grid inside the
+release ellipse, cell = the piece's **bounding-sphere diameter + clearance**, so
+*any* random orientation still clears its neighbours; rows stack upward. The
+physics wall cage and outer backstop are extended up to the top of that column
+(`releaseTop`) so every piece is contained on the way down — the *rendered* tube
+stays a sane height, the cloud simply rains in from above it.
+
+Measured, trickle vs batch (150 × ⌀30×4, seed 7):
+
+| mode | time-to-settle | fill mm | deep >0.5 mm | contained |
+| --- | --- | --- | --- | --- |
+| trickle | ~20.7 s (17 s is the feed) | 164 | 43 | 150/150 |
+| batch | **~1.9 s** | 177 | 44 | 150/150 |
+
+Both come **fully to rest** (every body asleep, zero velocity) and stay **contained**
+(escX = escZ = below = 0). Batch is ~10× faster (no 17 s feed) and shows **no
+overlap regression** (deep contacts 44 vs 43). Batch packs ~8 % looser (fill 177
+vs 164) — a real, expected difference: a simultaneous dump lands more chaotically
+than a gentle feed, it is not an overlap artifact. The settle detector gained a
+`calmT` timer that only advances once the pile is no longer free-falling
+(avg < `CALM_SPEED` 0.2 m/s), so a batch cloud is never frozen mid-drop; and the
+overfull back-up count now ignores pieces at/above the release plane, so a fresh
+batch cloud (momentarily at rest the instant it spawns) does not read as instantly
+overfull. **Default = trickle**: both settle reliably, but the gentle feed spreads
+the solver load over time (more robust across extreme geometry) and packs a touch
+denser, so it stays the default; batch is the opt-in bulk-dump.
