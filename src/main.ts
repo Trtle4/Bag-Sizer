@@ -71,6 +71,7 @@ function fillParams(s: AppState, seed: number): FillParams {
     dropH: s.dropH,
     stiff: s.stiff,
     seed,
+    release: s.release,
   };
 }
 
@@ -120,6 +121,7 @@ bindSeg("segMode", "mode", () => {
   $("fCount").style.display = s.mode === "count" ? "" : "none";
   $("fWeight").style.display = s.mode === "weight" ? "" : "none";
 });
+bindSeg("segRelease", "release");
 function syncStyleFields(): void {
   const s = store.get();
   // Gusset depth only applies to the gusset-bearing styles.

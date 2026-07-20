@@ -31,6 +31,8 @@ export interface AppState {
   nCount: number;
   nWt: number;
   dropH: number;
+  /** How product enters: sequential feed (trickle) or a one-shot bulk dump (batch). */
+  release: "trickle" | "batch";
 
   style: BagStyleId;
   bagW: number;
@@ -71,6 +73,7 @@ export const initialState: AppState = {
   nCount: 18,
   nWt: 150,
   dropH: 250,
+  release: "trickle",
 
   style: "pillow",
   bagW: 140,
