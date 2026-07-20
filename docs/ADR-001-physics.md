@@ -364,3 +364,30 @@ batch cloud (momentarily at rest the instant it spawns) does not read as instant
 overfull. **Default = trickle**: both settle reliably, but the gentle feed spreads
 the solver load over time (more robust across extreme geometry) and packs a touch
 denser, so it stays the default; batch is the opt-in bulk-dump.
+
+### Top-seal jaw fit check — completing the VFFS cycle (2026-07-20)
+
+The last roadmap item: after the pile settles, two sealing jaws close at the jaw
+plane to form the top seal, and the sim reports whether the seal is clean or
+catches product.
+
+- **Real geometric check, not just an animation** (`FillSim.sealCheck(clearance)`).
+  Each settled piece's top is measured from its *oriented* bounding box (a
+  flat-lying disc reaches far less than an on-edge one — `pieceHalfHeightY` uses
+  the rotation matrix, so it is not fooled by the smoothed fill-line). A clean
+  seal needs the highest piece at least `clearance` mm below the jaw plane; any
+  piece reaching into the seal zone (jawPlane − clearance … jawPlane) is caught.
+- **Tied to the user-adjustable threshold.** `clearance` is the 05-Limits
+  **min-headspace**, so the pass/fail moves with that value (a fill that seals at
+  30 mm rejects at 60 mm — asserted in `seal.test.ts`).
+- **States.** After settle the jaws animate in (`SceneRenderer.setSeal`): on a
+  clean seal they meet and a hatched closed-top strip appears — a finished, sealed
+  pillow — with a green **Sealed** chip and a ✓ advisory. On a reject the jaws
+  stop short with a gap and turn red, a blocked **Caught product** chip, and a ✕
+  advisory pointing at headspace / bag length / fill. Overfull (product already
+  past the jaw plane) is still caught by the existing overfull path.
+- **Both fill modes.** The check runs the same on trickle and batch; a batch
+  dump's ~1 mm-higher pack does not flip a clear pass. `seal.test.ts` verifies a
+  roomy fill seals clean and a near-full fill is rejected, on both modes, and that
+  the result flips on the clearance threshold. Render-only jaws — the pass/fail is
+  the physics measurement.

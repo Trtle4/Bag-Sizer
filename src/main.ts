@@ -13,7 +13,7 @@ import {
   type AppState,
 } from "./state.js";
 import { FillSim, initPhysics, FIXED_DT, type FillParams, type Measurements } from "./physics/world.js";
-import { SceneRenderer, type CameraMode } from "./render/scene.js";
+import { SceneRenderer, type CameraMode, type SealPhase } from "./render/scene.js";
 import { DimOverlay } from "./render/dims.js";
 import { renderDieline } from "./render/dieline.js";
 import { getBagStyle, type BagParams } from "./bagstyles/index.js";
@@ -185,12 +185,14 @@ $("btnDrop").addEventListener("click", () => {
   const s = store.get();
   sim.build(fillParams(s, nextSeed(s)));
   dirty = false;
+  resetSeal();
   sim.start();
   setStatusChip();
 });
 $("btnReset").addEventListener("click", () => {
   rebuild();
   sim.reset();
+  resetSeal();
   setStatusChip();
 });
 const btnDims = $("btnDims");
@@ -370,8 +372,16 @@ function setStatusChip(): void {
   const chip = $("statusChip");
   const tx = $("statusTxt");
   const st = lastMeasure.status;
-  chip.classList.remove("filling", "blocked");
-  if (st === "overfull" || jawViolation(s)) {
+  chip.classList.remove("filling", "blocked", "sealed");
+  if (sealPhase === "caught") {
+    chip.classList.add("blocked");
+    tx.textContent = "Caught product";
+  } else if (sealPhase === "sealed") {
+    chip.classList.add("sealed");
+    tx.textContent = "Sealed";
+  } else if (sealPhase === "closing") {
+    tx.textContent = "Sealing…";
+  } else if (st === "overfull" || jawViolation(s)) {
     chip.classList.add("blocked");
     tx.textContent = st === "overfull" ? "Overfull" : "Jaw risk";
   } else if (st === "filling") {
@@ -391,7 +401,15 @@ function advisories(): void {
   const innerLen = innerLength(s.bagL, s.endSeal);
   const hs = headspaceOf(innerLen, lastMeasure.fillLine);
   let out = "";
-  if (lastMeasure.status === "overfull") {
+  if (sealPhase === "caught") {
+    out += `<div class="advisory danger"><span class="ic">✕</span><span>Product caught in the seal jaws — raise the ${fmt1(
+      s.minHeadspace,
+    )} mm min-headspace clearance, lengthen the bag, or reduce the fill.</span></div>`;
+  } else if (sealPhase === "sealed") {
+    out += `<div class="advisory ok"><span class="ic">✓</span><span>Top seal clean — product clears the jaw plane by the ${fmt1(
+      s.minHeadspace,
+    )} mm minimum.</span></div>`;
+  } else if (lastMeasure.status === "overfull") {
     out += `<div class="advisory danger"><span class="ic">✕</span><span>Fill exceeds the seal jaw plane — lengthen the bag, widen it, or reduce the fill.</span></div>`;
   } else if (jawViolation(s)) {
     out += `<div class="advisory danger"><span class="ic">✕</span><span>Fill is within the ${fmt1(
@@ -473,6 +491,47 @@ function drawDims(s: AppState): void {
 let last = performance.now();
 let acc = 0;
 let prevStatus = "ready";
+
+// ---------- top-seal jaws ----------
+const SEAL_TIME = 0.55; // s for the jaws to close
+let sealPhase: SealPhase = "none";
+let sealAnim = 0;
+let sealClean = false;
+function resetSeal(): void {
+  sealPhase = "none";
+  sealAnim = 0;
+  sealClean = false;
+}
+/** Drive the seal sequence: once the pile settles, close the jaws and run the fit
+ *  check against the 05-Limits min-headspace, then hold sealed / caught. */
+function updateSeal(dt: number, s: AppState): void {
+  const settled = lastMeasure.status === "settled" && sim.particleCount > 0;
+  if (!settled) {
+    // Still filling / overfull / empty — no seal yet (a new drop resets it).
+    if (sealPhase !== "none") resetSeal();
+  } else {
+    if (sealPhase === "none") {
+      // The pile just settled: jaws start closing; the fit check is decided now.
+      sealClean = sim.sealCheck(s.minHeadspace).clean;
+      sealPhase = "closing";
+      sealAnim = 0;
+    }
+    if (sealPhase === "closing") {
+      sealAnim = Math.min(1, sealAnim + dt / SEAL_TIME);
+      if (sealAnim >= 1) sealPhase = sealClean ? "sealed" : "caught";
+    }
+  }
+  const env = sim.envelope;
+  renderer.setSeal({
+    phase: sealPhase,
+    anim: sealAnim,
+    clean: sealClean,
+    halfW: env.usableHalfW,
+    halfD: env.usableHalfD,
+    jawY: env.jawY,
+  });
+}
+
 function frame(now: number): void {
   let dt = (now - last) / 1000;
   last = now;
@@ -492,11 +551,12 @@ function frame(now: number): void {
   if (dirty && !sim.isActive) rebuild();
   const s = store.get();
   if (s.view === "fill") {
+    updateSeal(dt, s);
     renderer.draw(sim);
     drawDims(s);
   }
   liveReadouts(lastMeasure);
-  const statusKey = `${lastMeasure.status}|${jawViolation(s)}`;
+  const statusKey = `${lastMeasure.status}|${jawViolation(s)}|${sealPhase}`;
   if (statusKey !== prevStatus) {
     prevStatus = statusKey;
     setStatusChip();
