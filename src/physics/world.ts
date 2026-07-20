@@ -852,6 +852,55 @@ export class FillSim {
     return this.running || this.product.some((b) => this.speed(b) > 0.02);
   }
 
+  /**
+   * Top-seal fit check. After the pile settles, the sealing jaws close at the jaw
+   * plane (y = innerLen). A clean seal needs the settled product to sit at least
+   * `clearance` mm below that plane; any piece reaching up into the seal zone
+   * (jawPlane − clearance … jawPlane) would be caught in the jaws — a reject.
+   *
+   * `productTop` is measured per piece from its *oriented* bounding box (a
+   * flat-lying disc reaches far less than an on-edge one), so this is the real
+   * geometric check, not just the smoothed fill-line metric.
+   */
+  sealCheck(clearance: number): {
+    clean: boolean;
+    clearance: number; // actual mm from product top to the jaw plane
+    productTop: number;
+    jawPlane: number;
+    caught: number; // pieces intruding into the seal zone
+  } {
+    const jawPlane = this.innerLen;
+    const zone = jawPlane - Math.max(0, clearance);
+    let productTop = 0;
+    let caught = 0;
+    for (const b of this.product) {
+      const top = this.appY(b) + this.pieceHalfHeightY(b);
+      if (top > productTop) productTop = top;
+      if (top > zone) caught++;
+    }
+    return {
+      clean: this.product.length > 0 && productTop <= zone,
+      clearance: jawPlane - productTop,
+      productTop,
+      jawPlane,
+      caught,
+    };
+  }
+
+  /** World-Y half-extent of a piece's oriented bounding box (mm). */
+  private pieceHalfHeightY(b: RAPIER.RigidBody): number {
+    const p = this.params.product;
+    const hx = p.w / 2;
+    const hy = p.h / 2;
+    const hz = p.round ? p.w / 2 : p.depth / 2;
+    const q = b.rotation();
+    // Row 1 of the local→world rotation matrix = world-Y components of each local axis.
+    const r10 = Math.abs(2 * (q.x * q.y + q.w * q.z));
+    const r11 = Math.abs(1 - 2 * (q.x * q.x + q.z * q.z));
+    const r12 = Math.abs(2 * (q.y * q.z - q.w * q.x));
+    return r10 * hx + r11 * hy + r12 * hz;
+  }
+
   /** Settling diagnostics (m/s): mean/max speed and how many bodies are asleep. */
   restDebug(): { n: number; avg: number; max: number; sleeping: number } {
     const n = this.product.length;

@@ -47,6 +47,8 @@ body{
 .ready.filling .dot{background:var(--accent); box-shadow:0 0 0 3px var(--accent-soft)}
 .ready.blocked{color:var(--danger)}
 .ready.blocked .dot{background:var(--danger); box-shadow:0 0 0 3px rgba(178,58,46,.15)}
+.ready.sealed{color:var(--valid); font-weight:600}
+.ready.sealed .dot{background:var(--valid); box-shadow:0 0 0 3px rgba(47,125,91,.28)}
 .btn{
   font-family:var(--sans); font-size:13px; font-weight:500; cursor:pointer;
   padding:8px 15px; border-radius:var(--r-sm); border:1px solid var(--line);
@@ -168,6 +170,8 @@ body{
 .advisory .ic{font-family:var(--mono); color:var(--warn); font-weight:600}
 .advisory.danger{background:var(--danger-soft); border-color:#EABFB9; color:#7d2318}
 .advisory.danger .ic{color:var(--danger)}
+.advisory.ok{background:rgba(47,125,91,.10); border-color:#bfdcc9; color:#245c40}
+.advisory.ok .ic{color:var(--valid)}
 
 /* ---------- viewport ---------- */
 .viewport{

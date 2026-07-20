@@ -18,6 +18,7 @@ import { TUNING } from "../physics/world.js";
 import { simplifyHull } from "../geometry/hull.js";
 
 export type CameraMode = "iso" | "front" | "side";
+export type SealPhase = "none" | "closing" | "sealed" | "caught";
 const MAX_INSTANCES = 200;
 
 // Design-system colours.
@@ -45,6 +46,10 @@ export class SceneRenderer {
   private tubeEdges: THREE.LineSegments;
   private funnel: THREE.Mesh;
   private funnelEdges: THREE.LineSegments;
+  private jawL: THREE.Mesh; // sealing jaws that close in at the seal plane
+  private jawR: THREE.Mesh;
+  private topSeal: THREE.Mesh; // hatched closed top strip, shown on a clean seal
+  private jawMat: THREE.MeshStandardMaterial;
 
   // Cache so the (per-frame) formed shell only rebuilds when it moves materially.
   private shellKey = "";
@@ -144,6 +149,18 @@ export class SceneRenderer {
       new THREE.EdgesGeometry(new THREE.CylinderGeometry(2, 1, 1, 40, 1, true)),
       new THREE.LineBasicMaterial({ color: 0x9aa6ad, transparent: true, opacity: 0.45 }),
     );
+    // Sealing jaws — two steel bars that slide in at the seal plane after settle.
+    this.jawMat = new THREE.MeshStandardMaterial({ color: 0x8a949b, roughness: 0.5, metalness: 0.3 });
+    this.jawL = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), this.jawMat);
+    this.jawR = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), this.jawMat);
+    this.jawL.visible = false;
+    this.jawR.visible = false;
+    // Closed top seal — a flat hatched strip at the jaw plane on a clean seal.
+    this.topSeal = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({ color: COL_INK2, transparent: true, opacity: 0.32, side: THREE.DoubleSide }),
+    );
+    this.topSeal.visible = false;
     this.shellGroup.add(
       this.pillow,
       this.pillowEdges,
@@ -152,6 +169,9 @@ export class SceneRenderer {
       this.tubeEdges,
       this.funnel,
       this.funnelEdges,
+      this.jawL,
+      this.jawR,
+      this.topSeal,
     );
     this.scene.add(this.shellGroup);
 
@@ -272,6 +292,41 @@ export class SceneRenderer {
 
     if (this.mode === "iso") this.controls.update();
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /**
+   * Drive the top-seal jaws. They slide in at the seal plane after the pile
+   * settles; on a clean seal they meet and a hatched closed-top strip appears, on
+   * a caught-product reject they stop short with a gap and turn red. Render-only —
+   * the pass/fail comes from `FillSim.sealCheck`.
+   */
+  setSeal(cfg: { phase: SealPhase; anim: number; clean: boolean; halfW: number; halfD: number; jawY: number }): void {
+    const active = cfg.phase !== "none";
+    this.jawL.visible = active;
+    this.jawR.visible = active;
+    // The forming tube is gone once the bag is being sealed off.
+    this.tube.visible = !active;
+    this.tubeEdges.visible = !active;
+    this.topSeal.visible = cfg.phase === "sealed";
+    if (!active) return;
+
+    const thick = 14;
+    const jawH = 18;
+    const depth = 2 * cfg.halfD + 30;
+    const openX = cfg.halfW + 60;
+    const gap = cfg.clean ? 0 : Math.max(12, cfg.halfW * 0.7); // caught jaws stop short
+    const restCentre = gap / 2 + thick / 2;
+    const cx = openX + (restCentre - openX) * Math.min(1, Math.max(0, cfg.anim));
+    this.jawL.scale.set(thick, jawH, depth);
+    this.jawR.scale.set(thick, jawH, depth);
+    this.jawL.position.set(-cx, cfg.jawY, 0);
+    this.jawR.position.set(cx, cfg.jawY, 0);
+    this.jawMat.color.setHex(cfg.clean ? 0x8a949b : 0xc0564e); // steel vs reject-red
+
+    if (cfg.phase === "sealed") {
+      this.topSeal.scale.set(2 * cfg.halfW + 8, 14, 1);
+      this.topSeal.position.set(0, cfg.jawY, 0);
+    }
   }
 
   /**
